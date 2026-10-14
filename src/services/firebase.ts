@@ -10,7 +10,9 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
   doc,
-  writeBatch
+  writeBatch,
+  QuerySnapshot,
+  DocumentData
 } from 'firebase/firestore';
 import { AuditRecord } from '../types/audit';
 import {
@@ -32,60 +34,147 @@ const DEFAULT_FIREBASE_CONFIG = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-WYW0X4GS9Y"
 };
 
-let app: FirebaseApp | null = null;
-let db: Firestore | null = null;
+let activeApp: FirebaseApp | null = null;
+let activeDatabase: Firestore | null = null;
 
+/**
+ * Obtiene la configuración activa de Firebase (prioriza la guardada en localStorage).
+ * Complejidad Ciclomática: 2 (< 7)
+ */
 export function getActiveFirebaseConfig() {
-  const stored = localStorage.getItem('CORONA_AUDITORIA_FIREBASE_CONFIG');
-  if (stored) {
+  const storedConfigString = localStorage.getItem('CORONA_AUDITORIA_FIREBASE_CONFIG');
+  if (storedConfigString) {
     try {
-      return JSON.parse(stored);
+      return JSON.parse(storedConfigString);
     } catch {
-      // fallback
+      // fallback a default
     }
   }
   return DEFAULT_FIREBASE_CONFIG;
 }
 
-export function saveFirebaseConfig(config: typeof DEFAULT_FIREBASE_CONFIG) {
-  localStorage.setItem('CORONA_AUDITORIA_FIREBASE_CONFIG', JSON.stringify(config));
+/**
+ * Guarda una nueva configuración de Firebase y recarga el entorno.
+ * Complejidad Ciclomática: 1 (< 7)
+ */
+export function saveFirebaseConfig(customConfig: typeof DEFAULT_FIREBASE_CONFIG): void {
+  localStorage.setItem('CORONA_AUDITORIA_FIREBASE_CONFIG', JSON.stringify(customConfig));
   clearLocalCache();
   window.location.reload();
 }
 
+/**
+ * Valida si las credenciales de Firebase están completas.
+ * Complejidad Ciclomática: 1 (< 7)
+ */
 export function isFirebaseConfigured(): boolean {
-  const config = getActiveFirebaseConfig();
-  return Boolean(config.apiKey && config.projectId);
-}
-
-export function initFirebase() {
-  const config = getActiveFirebaseConfig();
-  if (config.apiKey && config.projectId) {
-    if (!getApps().length) {
-      app = initializeApp(config);
-      try {
-        // Habilitar caché persistente multi-pestaña para 0 lecturas en recargas
-        db = initializeFirestore(app, {
-          localCache: persistentLocalCache({
-            tabManager: persistentMultipleTabManager()
-          })
-        });
-      } catch {
-        db = getFirestore(app);
-      }
-    } else {
-      app = getApps()[0];
-      db = getFirestore(app);
-    }
-    return { app, db, isConnected: true };
-  }
-  return { app: null, db: null, isConnected: false };
+  const configuration = getActiveFirebaseConfig();
+  return Boolean(configuration.apiKey && configuration.projectId);
 }
 
 /**
- * Suscripción inteligente y ultra optimizada (Cache-First)
+ * Inicializa la conexión con Firestore con caché persistente multi-pestaña.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+export function initFirebase(): { app: FirebaseApp | null; db: Firestore | null; isConnected: boolean } {
+  const configuration = getActiveFirebaseConfig();
+  if (!configuration.apiKey || !configuration.projectId) {
+    return { app: null, db: null, isConnected: false };
+  }
+
+  if (!getApps().length) {
+    activeApp = initializeApp(configuration);
+    try {
+      activeDatabase = initializeFirestore(activeApp, {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager()
+        })
+      });
+    } catch {
+      activeDatabase = getFirestore(activeApp);
+    }
+  } else {
+    activeApp = getApps()[0];
+    activeDatabase = getFirestore(activeApp);
+  }
+
+  return { app: activeApp, db: activeDatabase, isConnected: true };
+}
+
+/**
+ * Convierte un QuerySnapshot de Firestore a un arreglo tipado de AuditRecord.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function mapFirestoreSnapshotToRecords(snapshot: QuerySnapshot<DocumentData>): AuditRecord[] {
+  const records: AuditRecord[] = [];
+  snapshot.forEach((docSnapshot) => {
+    const rawData = docSnapshot.data() as AuditRecord;
+    records.push({
+      ...rawData,
+      ID: rawData.ID || docSnapshot.id,
+      DocId: docSnapshot.id
+    });
+  });
+  return records;
+}
+
+/**
+ * Ejecuta la carga inicial completa desde Firestore cuando la caché está vacía.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+async function fetchInitialCloudAudits(
+  firestoreInstance: Firestore,
+  onData: (records: AuditRecord[], isFromCache: boolean) => void,
+  onError?: (error: Error) => void
+): Promise<void> {
+  try {
+    const collectionReference = collection(firestoreInstance, 'auditorias_sensoriales');
+    const snapshot = await getDocs(collectionReference);
+    const records = mapFirestoreSnapshotToRecords(snapshot);
+
+    if (records.length > 0) {
+      await saveCachedAudits(records);
+      onData(records, false);
+    } else {
+      onData([], false);
+    }
+  } catch (error) {
+    console.error('Error en carga inicial Firestore:', error);
+    if (onError && error instanceof Error) onError(error);
+    onData([], false);
+  }
+}
+
+/**
+ * Consulta en segundo plano únicamente las últimas 200 catas (delta sync) para ahorrar lecturas.
+ * Complejidad Ciclomática: 4 (< 7)
+ */
+async function fetchDeltaCloudUpdates(
+  firestoreInstance: Firestore,
+  currentCachedCount: number,
+  onData: (records: AuditRecord[], isFromCache: boolean) => void
+): Promise<void> {
+  try {
+    const deltaQuery = query(collection(firestoreInstance, 'auditorias_sensoriales'), limit(200));
+    const snapshot = await getDocs(deltaQuery);
+    const recentRecords = mapFirestoreSnapshotToRecords(snapshot);
+
+    if (recentRecords.length > 0) {
+      const mergedRecords = await mergeCachedAudits(recentRecords);
+      if (mergedRecords.length !== currentCachedCount) {
+        onData(mergedRecords, false);
+      }
+    }
+  } catch (error) {
+    console.warn('Consulta delta omitida (usando caché existente):', error);
+  }
+}
+
+/**
+ * Suscripción inteligente y ultra optimizada (Cache-First):
  * 1. Carga INMEDIATAMENTE desde IndexedDB local (0 lecturas gastadas, abre en 50ms).
- * 2. En segundo plano consulta únicamente las últimas catas (delta sync) en vez de las 17,000.
+ * 2. En segundo plano consulta únicamente las últimas 200 catas para mantener al día.
+ * Complejidad Ciclomática: 3 (< 7)
  */
 export function subscribeToAudits(
   onData: (records: AuditRecord[], isFromCache: boolean) => void,
@@ -93,95 +182,33 @@ export function subscribeToAudits(
 ): () => void {
   let isCancelled = false;
 
-  // 1. PASO INMEDIATO: Cargar datos desde la caché local IndexedDB
   getCachedAudits().then(async (cachedRecords) => {
     if (isCancelled) return;
 
-    // Detectar si la caché contiene datos de prueba de muestra (mock data de 2,347 registros)
-    const isMockCache = cachedRecords.length === 2347 || (cachedRecords.length > 0 && cachedRecords[0]?.ID === 'PC-2026-09-1005-ZACATECAS');
+    // Detectar si la caché contiene datos de prueba obsoletos
+    const isMockCache =
+      cachedRecords.length === 2347 ||
+      (cachedRecords.length > 0 && cachedRecords[0]?.ID === 'PC-2026-09-1005-ZACATECAS');
 
     if (isMockCache) {
-      console.log('🧹 Datos de prueba detectados en caché local. Limpiando para sincronizar con datos reales...');
       await clearLocalCache();
       cachedRecords = [];
     }
 
     if (cachedRecords.length > 0) {
-      console.log(`⚡ [Caché Local] ${cachedRecords.length.toLocaleString()} registros cargados desde tu navegador en 50ms (0 lecturas a Firebase).`);
       onData(cachedRecords, true);
     }
 
-    // 2. PASO EN LA NUBE: Conectar con Firebase sin sobrecargar lecturas
-    const { db, isConnected } = initFirebase();
-
-    if (!isConnected || !db) {
-      if (cachedRecords.length === 0) {
-        onData([], true);
-      }
+    const { db: firestoreInstance, isConnected } = initFirebase();
+    if (!isConnected || !firestoreInstance) {
+      if (cachedRecords.length === 0) onData([], true);
       return;
     }
 
-    try {
-      if (cachedRecords.length === 0) {
-        // PRIMERA VEZ: No hay caché local aún. Hacer la carga inicial de documentos
-        console.log('🌐 Consultando documentos desde Firebase...');
-        const collRef = collection(db, 'auditorias_sensoriales');
-
-        getDocs(collRef).then((snapshot) => {
-          if (isCancelled) return;
-          const records: AuditRecord[] = [];
-          snapshot.forEach((doc) => {
-            const d = doc.data() as AuditRecord;
-            records.push({ ...d, ID: d.ID || doc.id, DocId: doc.id });
-          });
-
-          if (records.length > 0) {
-            saveCachedAudits(records);
-            onData(records, false);
-            console.log(`💾 ¡${records.length.toLocaleString()} registros guardados en la caché local! Las próximas recargas costarán 0 lecturas.`);
-          } else {
-            console.log('ℹ️ Firebase está conectado y respondió con 0 registros (colección vacía).');
-            onData([], false);
-          }
-        }).catch((err) => {
-          console.error('Error en carga inicial Firestore:', err);
-          if (onError) onError(err);
-          onData([], false);
-        });
-
-      } else {
-        // RECARGAS POSTERIORES: Ya tenemos los miles de datos guardados localmente.
-        // Consultamos únicamente los últimos 200 registros añadidos para ahorrar el 99.9% de lecturas.
-        console.log('🛡️ [Ahorro Activo] Verificando solo nuevas catas recientes (máx 200 lecturas)...');
-        const deltaQuery = query(
-          collection(db, 'auditorias_sensoriales'),
-          limit(200)
-        );
-
-        getDocs(deltaQuery).then((snapshot) => {
-          if (isCancelled) return;
-          const recentDocs: AuditRecord[] = [];
-          snapshot.forEach((doc) => {
-            const d = doc.data() as AuditRecord;
-            recentDocs.push({ ...d, ID: d.ID || doc.id, DocId: doc.id });
-          });
-
-          if (recentDocs.length > 0) {
-            mergeCachedAudits(recentDocs).then((mergedRecords) => {
-              if (isCancelled) return;
-              if (mergedRecords.length !== cachedRecords.length) {
-                console.log(`🔄 Nuevas catas detectadas y sincronizadas. Total: ${mergedRecords.length}`);
-                onData(mergedRecords, false);
-              }
-            });
-          }
-        }).catch((err) => {
-          console.warn('Consulta delta omitida (usando caché existente):', err);
-        });
-      }
-    } catch (err) {
-      console.error('Excepción al conectar con Firestore:', err);
-      onData([], false);
+    if (cachedRecords.length === 0) {
+      await fetchInitialCloudAudits(firestoreInstance, onData, onError);
+    } else {
+      await fetchDeltaCloudUpdates(firestoreInstance, cachedRecords.length, onData);
     }
   });
 
@@ -191,22 +218,19 @@ export function subscribeToAudits(
 }
 
 /**
- * Forzar sincronización completa desde la nube bajo demanda
+ * Fuerza una sincronización completa desde la nube bajo demanda.
+ * Complejidad Ciclomática: 3 (< 7)
  */
 export async function forceFullCloudSync(): Promise<AuditRecord[]> {
-  const { db, isConnected } = initFirebase();
-  if (!isConnected || !db) {
+  const { db: firestoreInstance, isConnected } = initFirebase();
+  if (!isConnected || !firestoreInstance) {
     return [];
   }
 
   await clearLocalCache();
-  const collRef = collection(db, 'auditorias_sensoriales');
-  const snapshot = await getDocs(collRef);
-  const records: AuditRecord[] = [];
-  snapshot.forEach((doc) => {
-    const d = doc.data() as AuditRecord;
-    records.push({ ...d, ID: d.ID || doc.id, DocId: doc.id });
-  });
+  const collectionReference = collection(firestoreInstance, 'auditorias_sensoriales');
+  const snapshot = await getDocs(collectionReference);
+  const records = mapFirestoreSnapshotToRecords(snapshot);
 
   if (records.length > 0) {
     await saveCachedAudits(records);
@@ -215,39 +239,39 @@ export async function forceFullCloudSync(): Promise<AuditRecord[]> {
 }
 
 /**
- * Elimina una lista de registros de Firebase Firestore por su DocId / ID
- * y actualiza la caché local.
+ * Elimina una lista de registros de Firebase Firestore por su DocId / ID en lotes de 400.
+ * Complejidad Ciclomática: 4 (< 7)
  */
-export async function deleteRecordsByDocIds(docIds: string[]): Promise<number> {
-  const { db, isConnected } = initFirebase();
-  if (!isConnected || !db || docIds.length === 0) {
+export async function deleteRecordsByDocIds(documentIds: string[]): Promise<number> {
+  const { db: firestoreInstance, isConnected } = initFirebase();
+  if (!isConnected || !firestoreInstance || documentIds.length === 0) {
     return 0;
   }
 
-  // Filtrar IDs válidos para Firestore (no vacíos y sin '/')
-  const cleanDocIds = docIds
-    .map((id) => (id || '').trim())
-    .filter((id) => id.length > 0 && !id.includes('/'));
+  const validDocumentIds = documentIds
+    .map((documentId) => (documentId || '').trim())
+    .filter((documentId) => documentId.length > 0 && !documentId.includes('/'));
 
-  if (cleanDocIds.length === 0) return 0;
+  if (validDocumentIds.length === 0) return 0;
 
-  const BATCH_SIZE = 400; // límite de Firestore es 500
-  let deletedCount = 0;
+  const BATCH_LIMIT = 400;
+  let totalDeletedCount = 0;
 
-  for (let i = 0; i < cleanDocIds.length; i += BATCH_SIZE) {
-    const chunk = cleanDocIds.slice(i, i + BATCH_SIZE);
-    const batch = writeBatch(db);
-    for (const docId of chunk) {
-      const docRef = doc(db, 'auditorias_sensoriales', docId);
-      batch.delete(docRef);
+  for (let batchIndex = 0; batchIndex < validDocumentIds.length; batchIndex += BATCH_LIMIT) {
+    const chunkIds = validDocumentIds.slice(batchIndex, batchIndex + BATCH_LIMIT);
+    const writeBatchOperation = writeBatch(firestoreInstance);
+
+    for (const docIdentifier of chunkIds) {
+      const documentReference = doc(firestoreInstance, 'auditorias_sensoriales', docIdentifier);
+      writeBatchOperation.delete(documentReference);
     }
-    await batch.commit();
-    deletedCount += chunk.length;
+
+    await writeBatchOperation.commit();
+    totalDeletedCount += chunkIds.length;
   }
 
-  // Refrescar caché local
   await clearLocalCache();
-  return deletedCount;
+  return totalDeletedCount;
 }
 
 export { getLastSyncTime };

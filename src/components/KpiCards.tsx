@@ -8,41 +8,84 @@ interface KpiCardsProps {
   onFilterStatus?: (status: 'ALL' | 'OK' | 'NOK') => void;
 }
 
+/**
+ * Calculates frequency count of records grouped by an extraction key.
+ *
+ * Cyclomatic Complexity: 2 (< 7)
+ */
+function calculateFrequencyMap(
+  records: AuditRecord[],
+  extractCategory: (record: AuditRecord) => string
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  records.forEach((record) => {
+    const category = extractCategory(record) || 'N/A';
+    counts[category] = (counts[category] || 0) + 1;
+  });
+
+  return counts;
+}
+
+/**
+ * Finds the top category and count based on highest frequency.
+ *
+ * Cyclomatic Complexity: 2 (< 7)
+ */
+function findDominantCategory(
+  records: AuditRecord[],
+  extractCategory: (record: AuditRecord) => string
+): [string, number] {
+  const frequencyMap = calculateFrequencyMap(records, extractCategory);
+  const sortedEntries = Object.entries(frequencyMap).sort(
+    ([, countA], [, countB]) => countB - countA
+  );
+
+  return sortedEntries[0] || ['N/A', 0];
+}
+
+/**
+ * KPI summary banner displaying key high-level sensory metrics:
+ * Total samples, conformity percentage, top taster, dominant sample, and peak shift.
+ *
+ * Cyclomatic Complexity: 3 (< 7)
+ */
 export const KpiCards: React.FC<KpiCardsProps> = ({
   filteredRecords,
   allRecords,
   onFilterStatus,
 }) => {
-  const total = filteredRecords.length;
-  const okCount = filteredRecords.filter((r) => r.OKNOK === 'OK').length;
-  const nokCount = total - okCount;
-  const okPercentage = total > 0 ? ((okCount / total) * 100).toFixed(1) : '100';
+  const totalSamples = filteredRecords.length;
+  const approvedOkCount = filteredRecords.filter(
+    (record) => record.OKNOK === 'OK'
+  ).length;
+  const deviationsNokCount = totalSamples - approvedOkCount;
+  const conformityPercentage =
+    totalSamples > 0 ? ((approvedOkCount / totalSamples) * 100).toFixed(1) : '100';
 
-  // Encontrar el catador líder
-  const tasterCounts: Record<string, number> = {};
-  filteredRecords.forEach((r) => {
-    tasterCounts[r.Taster] = (tasterCounts[r.Taster] || 0) + 1;
-  });
-  const topTaster = Object.entries(tasterCounts).sort((a, b) => b[1] - a[1])[0] || ['N/A', 0];
+  const [dominantTasterName, dominantTasterCount] = findDominantCategory(
+    filteredRecords,
+    (record) => record.Taster
+  );
 
-  // Encontrar la muestra más catada
-  const sampleCounts: Record<string, number> = {};
-  filteredRecords.forEach((r) => {
-    sampleCounts[r.Sample] = (sampleCounts[r.Sample] || 0) + 1;
-  });
-  const topSample = Object.entries(sampleCounts).sort((a, b) => b[1] - a[1])[0] || ['N/A', 0];
+  const [dominantSampleName, dominantSampleCount] = findDominantCategory(
+    filteredRecords,
+    (record) => record.Sample
+  );
 
-  // Turno dominante
-  const shiftCounts: Record<string, number> = {};
-  filteredRecords.forEach((r) => {
-    shiftCounts[r.Shift] = (shiftCounts[r.Shift] || 0) + 1;
-  });
-  const topShift = Object.entries(shiftCounts).sort((a, b) => b[1] - a[1])[0] || ['N/A', 0];
+  const [dominantShiftName, dominantShiftCount] = findDominantCategory(
+    filteredRecords,
+    (record) => record.Shift
+  );
+
+  const totalProportionPercentage =
+    allRecords.length > 0
+      ? `${((totalSamples / allRecords.length) * 100).toFixed(0)}% del total`
+      : '';
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-      
-      {/* KPI Principal: TOTAL DE MUESTRAS CATADAS (Destacado como en PowerBI pero ultra estilizado) */}
+      {/* KPI Principal: TOTAL DE MUESTRAS CATADAS */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#002D72] via-[#001D4A] to-[#070A12] border-2 border-amber-400/80 p-5 shadow-xl shadow-amber-500/10 group">
         <div className="absolute top-0 right-0 w-28 h-28 bg-amber-400/10 rounded-full blur-2xl group-hover:bg-amber-400/20 transition-all"></div>
         <div className="flex items-center justify-between text-xs text-amber-300 font-bold uppercase tracking-wider mb-2">
@@ -52,11 +95,11 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
           </span>
         </div>
         <div className="text-4xl lg:text-5xl font-black text-white tracking-tight">
-          {total.toLocaleString()}
+          {totalSamples.toLocaleString()}
         </div>
         <div className="mt-2 text-[11px] text-amber-200/80 flex items-center justify-between font-medium">
           <span>Recuento de ID</span>
-          <span>{allRecords.length > 0 ? `${((total / allRecords.length) * 100).toFixed(0)}% del total` : ''}</span>
+          <span>{totalProportionPercentage}</span>
         </div>
       </div>
 
@@ -69,7 +112,7 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
           </span>
         </div>
         <div className="text-3xl font-black text-slate-900 dark:text-white tracking-tight flex items-baseline gap-2">
-          {okPercentage}%
+          {conformityPercentage}%
           <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">OK</span>
         </div>
         <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
@@ -78,14 +121,14 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
             className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer transition-colors"
             title="Ver solo aprobadas (OK)"
           >
-            {okCount.toLocaleString()} Aprobadas
+            {approvedOkCount.toLocaleString()} Aprobadas
           </button>
           <button
             onClick={() => onFilterStatus && onFilterStatus('NOK')}
             className="text-rose-700 dark:text-rose-400 font-bold bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded border border-rose-200 dark:border-rose-800/40 hover:underline cursor-pointer transition-all hover:scale-105"
             title="¡Haz clic aquí para ver estas desviaciones!"
           >
-            {nokCount} Desviaciones
+            {deviationsNokCount} Desviaciones
           </button>
         </div>
       </div>
@@ -98,12 +141,14 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
             <Award className="w-4 h-4" />
           </span>
         </div>
-        <div className="text-sm font-bold text-slate-900 dark:text-white truncate title-clamp" title={topTaster[0]}>
-          {topTaster[0]}
+        <div className="text-sm font-bold text-slate-900 dark:text-white truncate" title={dominantTasterName}>
+          {dominantTasterName}
         </div>
         <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
           <span>Volumen analizado</span>
-          <span className="text-amber-600 dark:text-amber-400 font-bold">{topTaster[1].toLocaleString()} catas</span>
+          <span className="text-amber-600 dark:text-amber-400 font-bold">
+            {dominantTasterCount.toLocaleString()} catas
+          </span>
         </div>
       </div>
 
@@ -115,12 +160,14 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
             <Wine className="w-4 h-4" />
           </span>
         </div>
-        <div className="text-sm font-bold text-slate-900 dark:text-white truncate" title={topSample[0]}>
-          {topSample[0]}
+        <div className="text-sm font-bold text-slate-900 dark:text-white truncate" title={dominantSampleName}>
+          {dominantSampleName}
         </div>
         <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
           <span>Frecuencia</span>
-          <span className="text-sky-600 dark:text-sky-400 font-bold">{topSample[1].toLocaleString()} muestras</span>
+          <span className="text-sky-600 dark:text-sky-400 font-bold">
+            {dominantSampleCount.toLocaleString()} muestras
+          </span>
         </div>
       </div>
 
@@ -133,14 +180,15 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
           </span>
         </div>
         <div className="text-lg font-black text-slate-900 dark:text-white truncate">
-          {topShift[0]}
+          {dominantShiftName}
         </div>
         <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
           <span>Muestras evaluadas</span>
-          <span className="text-purple-600 dark:text-purple-300 font-bold">{topShift[1].toLocaleString()}</span>
+          <span className="text-purple-600 dark:text-purple-300 font-bold">
+            {dominantShiftCount.toLocaleString()}
+          </span>
         </div>
       </div>
-
     </div>
   );
 };

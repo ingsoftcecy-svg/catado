@@ -361,7 +361,6 @@ export function App() {
       
       {/* Barra de Navegación Superior */}
       <Navbar
-        totalRecords={filteredRecords.length}
         onRefresh={handleRefresh}
         onExport={handleExportCSV}
         isDark={isDark}

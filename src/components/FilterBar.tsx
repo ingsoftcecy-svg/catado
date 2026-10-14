@@ -17,6 +17,9 @@ const MONTH_NAMES = [
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
 ];
 
+/**
+ * Barra de Filtros interactiva para Año, Mes, Semana, Área, Turno y Búsqueda global.
+ */
 export const FilterBar: React.FC<FilterBarProps> = ({
   filters,
   onFilterChange,
@@ -26,7 +29,10 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   availableAreas,
   availableShifts,
 }) => {
-  const handleReset = () => {
+  /**
+   * Restablece todos los filtros a sus valores predeterminados
+   */
+  const handleResetFilters = () => {
     onFilterChange({
       year: 'ALL',
       month: 'ALL',
@@ -61,17 +67,17 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             >
               Todos
             </button>
-            {availableYears.map((yr) => (
+            {availableYears.map((yearOption) => (
               <button
-                key={yr}
-                onClick={() => onFilterChange({ ...filters, year: yr })}
+                key={yearOption}
+                onClick={() => onFilterChange({ ...filters, year: yearOption })}
                 className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                  filters.year === yr
+                  filters.year === yearOption
                     ? 'bg-amber-400 text-slate-950 shadow-sm font-bold'
                     : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white'
                 }`}
               >
-                {yr}
+                {yearOption}
               </button>
             ))}
           </div>
@@ -85,18 +91,18 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           </label>
           <select
             value={filters.month}
-            onChange={(e) =>
+            onChange={(changeEvent) =>
               onFilterChange({
                 ...filters,
-                month: e.target.value === 'ALL' ? 'ALL' : Number(e.target.value),
+                month: changeEvent.target.value === 'ALL' ? 'ALL' : Number(changeEvent.target.value),
               })
             }
             className="w-full bg-slate-50 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-white focus:outline-none focus:border-amber-400 transition-colors"
           >
             <option value="ALL">Todos los Meses</option>
-            {availableMonths.map((m) => (
-              <option key={m} value={m}>
-                {MONTH_NAMES[m - 1] || `Mes ${m}`} ({m})
+            {availableMonths.map((monthNumber) => (
+              <option key={monthNumber} value={monthNumber}>
+                {MONTH_NAMES[monthNumber - 1] || `Mes ${monthNumber}`} ({monthNumber})
               </option>
             ))}
           </select>
@@ -110,18 +116,18 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           </label>
           <select
             value={filters.week}
-            onChange={(e) =>
+            onChange={(changeEvent) =>
               onFilterChange({
                 ...filters,
-                week: e.target.value === 'ALL' ? 'ALL' : Number(e.target.value),
+                week: changeEvent.target.value === 'ALL' ? 'ALL' : Number(changeEvent.target.value),
               })
             }
             className="w-full bg-slate-50 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-white focus:outline-none focus:border-amber-400 transition-colors"
           >
             <option value="ALL">Todas las Semanas</option>
-            {availableWeeks.map((wk) => (
-              <option key={wk} value={wk}>
-                Semana {wk}
+            {availableWeeks.map((weekNumber) => (
+              <option key={weekNumber} value={weekNumber}>
+                Semana {weekNumber}
               </option>
             ))}
           </select>
@@ -144,24 +150,24 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             >
               Todas
             </button>
-            {availableAreas.map((area) => {
-              const isNd = area.trim() === '#N/D' || area.includes('#N/D');
-              const isSelected = filters.area === area;
+            {availableAreas.map((areaName) => {
+              const isMissingData = areaName.trim() === '#N/D' || areaName.includes('#N/D');
+              const isSelected = filters.area === areaName;
               return (
                 <button
-                  key={area}
-                  onClick={() => onFilterChange({ ...filters, area })}
+                  key={areaName}
+                  onClick={() => onFilterChange({ ...filters, area: areaName })}
                   className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-all ${
                     isSelected
-                      ? isNd
+                      ? isMissingData
                         ? 'bg-rose-600 text-white shadow-sm font-bold'
                         : 'bg-[#002D72] text-white shadow-sm'
-                      : isNd
+                      : isMissingData
                       ? 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 hover:bg-rose-100 font-bold'
                       : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white'
                   }`}
                 >
-                  {area}
+                  {areaName}
                 </button>
               );
             })}
@@ -176,13 +182,13 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           </label>
           <select
             value={filters.shift}
-            onChange={(e) => onFilterChange({ ...filters, shift: e.target.value })}
+            onChange={(changeEvent) => onFilterChange({ ...filters, shift: changeEvent.target.value })}
             className="w-full bg-slate-50 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-800 dark:text-white focus:outline-none focus:border-amber-400 transition-colors"
           >
             <option value="ALL">Todos los Turnos</option>
-            {availableShifts.map((s) => (
-              <option key={s} value={s}>
-                {s}
+            {availableShifts.map((shiftName) => (
+              <option key={shiftName} value={shiftName}>
+                {shiftName}
               </option>
             ))}
           </select>
@@ -199,7 +205,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <input
             type="text"
             value={filters.tasterSearch}
-            onChange={(e) => onFilterChange({ ...filters, tasterSearch: e.target.value })}
+            onChange={(changeEvent) => onFilterChange({ ...filters, tasterSearch: changeEvent.target.value })}
             placeholder="Buscar por catador, muestra, tanque, remark, ID..."
             className="w-full bg-slate-50 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-800 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-amber-400 transition-colors"
           />
@@ -255,7 +261,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
 
           {/* Reset Filters */}
           <button
-            onClick={handleReset}
+            onClick={handleResetFilters}
             className="ml-auto md:ml-3 flex items-center gap-1.5 px-3 py-1 text-xs text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded-lg transition-colors font-semibold"
             title="Restablecer filtros por defecto"
           >

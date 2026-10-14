@@ -54,8 +54,8 @@ export interface RecordValidationInfo {
 
 export interface TasterValidationIncident {
   taster: string;
-  singleCount: number;      // en 1 (solo 1 catador)
-  incompleteCount: number;  // en 0 (faltan columnas)
+  singleCount: number;      // en 1 (catado mal / no validado)
+  incompleteCount: number;  // en 0 (faltan columnas de tanque o remark)
   totalIncidents: number;
   sampleExamples: string[];
 }

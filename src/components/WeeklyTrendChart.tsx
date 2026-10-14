@@ -9,7 +9,8 @@ import {
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
-  Legend
+  Legend,
+  TooltipProps,
 } from 'recharts';
 import { CalendarDays, BarChart2, AlertCircle } from 'lucide-react';
 import { AuditRecord } from '../types/audit';
@@ -19,100 +20,183 @@ interface WeeklyTrendChartProps {
   records: AuditRecord[];
 }
 
-const MONTH_NAMES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+interface SeriesAreaAggregate {
+  CFR: number;
+  COC: number;
+  Otros: number;
+  total: number;
+}
 
+interface WeeklyDataPoint extends SeriesAreaAggregate {
+  semana: number;
+}
+
+interface MonthlyDataPoint extends SeriesAreaAggregate {
+  mesNum: number;
+  mes: string;
+}
+
+const MONTH_NAMES = [
+  'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+  'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic',
+];
+
+/**
+ * Extracts or deduces the calendar week number from a record.
+ *
+ * Cyclomatic Complexity: 3 (< 7)
+ */
+function extractWeekNumberFromRecord(record: AuditRecord): number {
+  const directWeek = Number(record.SEMANA);
+  if (!isNaN(directWeek) && directWeek > 0) {
+    return directWeek;
+  }
+
+  if (record.FECHADOR) {
+    const recordDate = new Date(record.FECHADOR);
+    const startOfYear = new Date(recordDate.getFullYear(), 0, 1);
+    const millisecondsDiff = recordDate.getTime() - startOfYear.getTime();
+    const daysOffset = millisecondsDiff / 86400000;
+    return Math.ceil((daysOffset + startOfYear.getDay() + 1) / 7);
+  }
+
+  return 1;
+}
+
+/**
+ * Extracts or deduces the calendar month number (1-12) from a record.
+ *
+ * Cyclomatic Complexity: 3 (< 7)
+ */
+function extractMonthNumberFromRecord(record: AuditRecord): number {
+  const directMonth = Number(record.MES);
+  if (!isNaN(directMonth) && directMonth >= 1 && directMonth <= 12) {
+    return directMonth;
+  }
+
+  if (record.FECHADOR) {
+    return new Date(record.FECHADOR).getMonth() + 1;
+  }
+
+  return 9; // Fallback standard operational month
+}
+
+/**
+ * Increments area counter within an aggregate container based on the area name.
+ *
+ * Cyclomatic Complexity: 3 (< 7)
+ */
+function incrementSeriesAreaCount(
+  targetAggregate: SeriesAreaAggregate,
+  rawArea?: string
+): void {
+  const cleanArea = String(rawArea || '').trim().toUpperCase();
+
+  if (cleanArea === 'CFR') {
+    targetAggregate.CFR++;
+  } else if (cleanArea === 'COC') {
+    targetAggregate.COC++;
+  } else {
+    targetAggregate.Otros++;
+  }
+
+  targetAggregate.total++;
+}
+
+/**
+ * Generates aggregated weekly breakdown data points for charting.
+ *
+ * Cyclomatic Complexity: 2 (< 7)
+ */
+function buildWeeklyChartData(records: AuditRecord[]): WeeklyDataPoint[] {
+  const weeklyMap: Record<number, WeeklyDataPoint> = {};
+
+  records.forEach((record) => {
+    const weekNumber = extractWeekNumberFromRecord(record);
+
+    if (!weeklyMap[weekNumber]) {
+      weeklyMap[weekNumber] = {
+        semana: weekNumber,
+        CFR: 0,
+        COC: 0,
+        Otros: 0,
+        total: 0,
+      };
+    }
+
+    incrementSeriesAreaCount(weeklyMap[weekNumber], record.Area);
+  });
+
+  return Object.values(weeklyMap).sort((a, b) => a.semana - b.semana);
+}
+
+/**
+ * Generates aggregated monthly breakdown data points for charting.
+ *
+ * Cyclomatic Complexity: 3 (< 7)
+ */
+function buildMonthlyChartData(records: AuditRecord[]): MonthlyDataPoint[] {
+  const monthlyMap: Record<number, MonthlyDataPoint> = {};
+
+  records.forEach((record) => {
+    const monthNumber = extractMonthNumberFromRecord(record);
+
+    if (!monthlyMap[monthNumber]) {
+      monthlyMap[monthNumber] = {
+        mesNum: monthNumber,
+        mes: MONTH_NAMES[monthNumber - 1] || `M${monthNumber}`,
+        CFR: 0,
+        COC: 0,
+        Otros: 0,
+        total: 0,
+      };
+    }
+
+    incrementSeriesAreaCount(monthlyMap[monthNumber], record.Area);
+  });
+
+  return Object.values(monthlyMap).sort((a, b) => a.mesNum - b.mesNum);
+}
+
+/**
+ * Chart component showing time evolution of sensory tastings by week or month,
+ * with separate series for CFR and COC production areas.
+ *
+ * Cyclomatic Complexity: 3 (< 7)
+ */
 export const WeeklyTrendChart: React.FC<WeeklyTrendChartProps> = ({ records }) => {
-  const isDark = useDarkMode();
+  const isDarkMode = useDarkMode();
   const [viewMode, setViewMode] = useState<'weekly' | 'monthly'>('weekly');
 
-  // Procesamiento Semanal
-  const weeklyData = useMemo(() => {
-    const weeklyMap: Record<number, { semana: number; CFR: number; COC: number; Otros: number; total: number }> = {};
-
-    records.forEach((r) => {
-      // Extraer semana robustamente (puede venir como número o string)
-      let wk = Number(r.SEMANA);
-      if (isNaN(wk) || wk <= 0) {
-        // Intentar deducir semana por fecha
-        if (r.FECHADOR) {
-          const d = new Date(r.FECHADOR);
-          const oneJan = new Date(d.getFullYear(), 0, 1);
-          wk = Math.ceil((((d.getTime() - oneJan.getTime()) / 86400000) + oneJan.getDay() + 1) / 7);
-        } else {
-          wk = 1;
-        }
-      }
-
-      if (!weeklyMap[wk]) {
-        weeklyMap[wk] = { semana: wk, CFR: 0, COC: 0, Otros: 0, total: 0 };
-      }
-
-      const areaClean = String(r.Area || '').trim().toUpperCase();
-      if (areaClean === 'CFR') {
-        weeklyMap[wk].CFR++;
-      } else if (areaClean === 'COC') {
-        weeklyMap[wk].COC++;
-      } else {
-        weeklyMap[wk].Otros++;
-      }
-      weeklyMap[wk].total++;
-    });
-
-    return Object.values(weeklyMap).sort((a, b) => a.semana - b.semana);
-  }, [records]);
-
-  // Procesamiento Mensual
-  const monthlyData = useMemo(() => {
-    const monthlyMap: Record<number, { mesNum: number; mes: string; CFR: number; COC: number; Otros: number; total: number }> = {};
-
-    records.forEach((r) => {
-      let m = Number(r.MES);
-      if (isNaN(m) || m <= 0 || m > 12) {
-        if (r.FECHADOR) {
-          m = new Date(r.FECHADOR).getMonth() + 1;
-        } else {
-          m = 9;
-        }
-      }
-
-      if (!monthlyMap[m]) {
-        monthlyMap[m] = {
-          mesNum: m,
-          mes: MONTH_NAMES[m - 1] || `M${m}`,
-          CFR: 0,
-          COC: 0,
-          Otros: 0,
-          total: 0
-        };
-      }
-
-      const areaClean = String(r.Area || '').trim().toUpperCase();
-      if (areaClean === 'CFR') {
-        monthlyMap[m].CFR++;
-      } else if (areaClean === 'COC') {
-        monthlyMap[m].COC++;
-      } else {
-        monthlyMap[m].Otros++;
-      }
-      monthlyMap[m].total++;
-    });
-
-    return Object.values(monthlyMap).sort((a, b) => a.mesNum - b.mesNum);
-  }, [records]);
+  const weeklyData = useMemo(() => buildWeeklyChartData(records), [records]);
+  const monthlyData = useMemo(() => buildMonthlyChartData(records), [records]);
 
   const activeData = viewMode === 'weekly' ? weeklyData : monthlyData;
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
+  const renderCustomTooltip = ({
+    active,
+    payload,
+    label,
+  }: TooltipProps<number, string>) => {
+    if (active && payload && payload.length > 0) {
+      const headerTitle =
+        viewMode === 'weekly' ? `Semana ${label}` : `Mes de ${label}`;
+
       return (
         <div className="bg-white dark:bg-[#0B101D] border border-slate-200 dark:border-slate-700 p-3 rounded-xl shadow-xl dark:shadow-2xl text-xs space-y-1 z-50">
           <p className="font-bold text-slate-900 dark:text-white text-sm border-b border-slate-100 dark:border-slate-800 pb-1">
-            {viewMode === 'weekly' ? `Semana ${label}` : `Mes de ${label}`}
+            {headerTitle}
           </p>
-          {payload.map((p: any) => (
-            <p key={p.name} style={{ color: p.color }} className="flex justify-between gap-4 font-semibold">
-              <span>{p.name}:</span>
-              <span className="font-mono font-bold">{p.value.toLocaleString()} catas</span>
+          {payload.map((seriesItem) => (
+            <p
+              key={seriesItem.name}
+              style={{ color: seriesItem.color }}
+              className="flex justify-between gap-4 font-semibold"
+            >
+              <span>{seriesItem.name}:</span>
+              <span className="font-mono font-bold">
+                {Number(seriesItem.value || 0).toLocaleString()} catas
+              </span>
             </p>
           ))}
         </div>
@@ -128,7 +212,9 @@ export const WeeklyTrendChart: React.FC<WeeklyTrendChartProps> = ({ records }) =
           <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <CalendarDays className="w-4 h-4 text-sky-500" />
             Evolución Temporal de Catados
-            <span className="text-xs font-normal text-slate-500 dark:text-slate-400">(Desglose por Área)</span>
+            <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+              (Desglose por Área)
+            </span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Comportamiento y volumen a través del tiempo entre CFR y COC
@@ -162,48 +248,84 @@ export const WeeklyTrendChart: React.FC<WeeklyTrendChartProps> = ({ records }) =
         </div>
       </div>
 
-      {/* Contenedor del Gráfico con Altura Fija Explícita (340px) para evitar error de 0px en Recharts */}
+      {/* Contenedor del Gráfico con Altura Fija Explícita (340px) */}
       <div className="w-full h-[340px] relative">
         {activeData.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 gap-2">
             <AlertCircle className="w-6 h-6 text-amber-500" />
-            <p className="text-xs">No hay datos temporales registrados para el filtro actual.</p>
+            <p className="text-xs">
+              No hay datos temporales registrados para el filtro actual.
+            </p>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={340}>
             {viewMode === 'weekly' ? (
-              <BarChart data={weeklyData} margin={{ top: 15, right: 25, left: 0, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#1E293B' : '#E2E8F0'} vertical={false} />
+              <BarChart
+                data={weeklyData}
+                margin={{ top: 15, right: 25, left: 0, bottom: 20 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke={isDarkMode ? '#1E293B' : '#E2E8F0'}
+                  vertical={false}
+                />
                 <XAxis
                   dataKey="semana"
-                  stroke={isDark ? '#64748B' : '#94A3B8'}
-                  tick={{ fontSize: 11, fill: isDark ? '#94A3B8' : '#475569' }}
-                  tickFormatter={(w) => `Sem ${w}`}
+                  stroke={isDarkMode ? '#64748B' : '#94A3B8'}
+                  tick={{ fontSize: 11, fill: isDarkMode ? '#94A3B8' : '#475569' }}
+                  tickFormatter={(weekNumber: number) => `Sem ${weekNumber}`}
                 />
                 <YAxis
-                  stroke={isDark ? '#64748B' : '#94A3B8'}
-                  tick={{ fontSize: 11, fill: isDark ? '#94A3B8' : '#475569' }}
-                  tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v)}
+                  stroke={isDarkMode ? '#64748B' : '#94A3B8'}
+                  tick={{ fontSize: 11, fill: isDarkMode ? '#94A3B8' : '#475569' }}
+                  tickFormatter={(tastingCount: number) =>
+                    tastingCount >= 1000
+                      ? `${(tastingCount / 1000).toFixed(1)}k`
+                      : String(tastingCount)
+                  }
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={renderCustomTooltip} />
                 <Legend verticalAlign="top" height={36} />
-                <Bar dataKey="CFR" fill="#0284C7" name="Área CFR" radius={[6, 6, 0, 0]} maxBarSize={45} />
-                <Bar dataKey="COC" fill="#F5A800" name="Área COC" radius={[6, 6, 0, 0]} maxBarSize={45} />
+                <Bar
+                  dataKey="CFR"
+                  fill="#0284C7"
+                  name="Área CFR"
+                  radius={[6, 6, 0, 0]}
+                  maxBarSize={45}
+                />
+                <Bar
+                  dataKey="COC"
+                  fill="#F5A800"
+                  name="Área COC"
+                  radius={[6, 6, 0, 0]}
+                  maxBarSize={45}
+                />
               </BarChart>
             ) : (
-              <LineChart data={monthlyData} margin={{ top: 15, right: 25, left: 0, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#1E293B' : '#E2E8F0'} vertical={false} />
+              <LineChart
+                data={monthlyData}
+                margin={{ top: 15, right: 25, left: 0, bottom: 20 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke={isDarkMode ? '#1E293B' : '#E2E8F0'}
+                  vertical={false}
+                />
                 <XAxis
                   dataKey="mes"
-                  stroke={isDark ? '#64748B' : '#94A3B8'}
-                  tick={{ fontSize: 11, fill: isDark ? '#94A3B8' : '#475569' }}
+                  stroke={isDarkMode ? '#64748B' : '#94A3B8'}
+                  tick={{ fontSize: 11, fill: isDarkMode ? '#94A3B8' : '#475569' }}
                 />
                 <YAxis
-                  stroke={isDark ? '#64748B' : '#94A3B8'}
-                  tick={{ fontSize: 11, fill: isDark ? '#94A3B8' : '#475569' }}
-                  tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v)}
+                  stroke={isDarkMode ? '#64748B' : '#94A3B8'}
+                  tick={{ fontSize: 11, fill: isDarkMode ? '#94A3B8' : '#475569' }}
+                  tickFormatter={(tastingCount: number) =>
+                    tastingCount >= 1000
+                      ? `${(tastingCount / 1000).toFixed(1)}k`
+                      : String(tastingCount)
+                  }
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={renderCustomTooltip} />
                 <Legend verticalAlign="top" height={36} />
                 <Line
                   type="monotone"
