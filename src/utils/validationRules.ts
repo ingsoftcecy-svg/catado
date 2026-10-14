@@ -1,95 +1,158 @@
-import { AuditRecord, ValidationStatus, RecordValidationInfo, TasterValidationIncident } from '../types/audit';
+import {
+  AuditRecord,
+  ValidationStatus,
+  RecordValidationInfo,
+  TasterValidationIncident
+} from '../types/audit';
 
 /**
- * Obtiene la clave de fecha del registro (YYYY-MM-DD o equivalente)
+ * Obtiene la clave de fecha del registro en formato estándar YYYY-MM-DD.
+ * Evalúa secuencialmente FECHADOR, SampleDate o combinación MES/DIA.
+ * Complejidad Ciclomática: 4 (< 7)
  */
-export function getRecordDateKey(r: AuditRecord): string {
-  if (r.FECHADOR) {
-    const d = String(r.FECHADOR).trim();
-    if (d.length >= 10) return d.slice(0, 10);
-    return d;
+export function getRecordDateKey(record: AuditRecord): string {
+  if (record.FECHADOR) {
+    const trimmedFechador = String(record.FECHADOR).trim();
+    return trimmedFechador.length >= 10 ? trimmedFechador.slice(0, 10) : trimmedFechador;
   }
-  if (r.SampleDate) {
-    const d = String(r.SampleDate).trim();
-    if (d.length >= 10) return d.slice(0, 10);
-    return d;
+
+  if (record.SampleDate) {
+    const trimmedSampleDate = String(record.SampleDate).trim();
+    return trimmedSampleDate.length >= 10 ? trimmedSampleDate.slice(0, 10) : trimmedSampleDate;
   }
-  if (r.MES && r.DIA) {
-    return `2026-${String(r.MES).padStart(2, '0')}-${String(r.DIA).padStart(2, '0')}`;
+
+  if (record.MES && record.DIA) {
+    const monthPadded = String(record.MES).padStart(2, '0');
+    const dayPadded = String(record.DIA).padStart(2, '0');
+    return `2026-${monthPadded}-${dayPadded}`;
   }
+
   return 'SIN_FECHA';
 }
 
 /**
- * Calcula el mapa de validación según la regla de negocio del panel:
+ * Determina si un valor de columna obligatorio (Tanque o Remark) está ausente o incompleto.
+ * Complejidad Ciclomática: 4 (< 7)
+ */
+function isColumnFieldMissing(fieldValue: string | undefined): boolean {
+  if (!fieldValue) return true;
+  const normalizedValue = fieldValue.trim().toLowerCase();
+  return (
+    normalizedValue === '' ||
+    normalizedValue === '0' ||
+    normalizedValue === '-' ||
+    normalizedValue === 'sin tanque' ||
+    normalizedValue === 'sin remark'
+  );
+}
+
+/**
+ * Genera el mensaje explicativo cuando faltan columnas clave.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+function buildMissingColumnsReason(isTankMissing: boolean, isRemarkMissing: boolean): string {
+  if (isTankMissing && isRemarkMissing) {
+    return 'Faltan columnas: Tanque y Remark';
+  }
+  if (isTankMissing) {
+    return 'Faltan columnas: Tanque';
+  }
+  return 'Faltan columnas: Remark';
+}
+
+/**
+ * Genera la clave de agrupación única para evaluar la regla 2-3 / 1 / 0.
+ * Agrupa por: Día + Muestra + Tanque + Remark.
+ * Complejidad Ciclomática: 1 (< 7)
+ */
+function buildTastingGroupKey(record: AuditRecord, tank: string, remark: string): string {
+  const dateKey = getRecordDateKey(record);
+  const sampleClean = (record.Sample || '').trim().toUpperCase();
+  const tankClean = tank.trim().toUpperCase();
+  const remarkClean = remark.trim().toUpperCase();
+  return `${dateKey}___${sampleClean}___${tankClean}___${remarkClean}`;
+}
+
+/**
+ * Determina el estado de validación según el número de repeticiones de la cata:
+ * - 2 o más: ESTÁ BIEN (Validado)
+ * - 1: ESTÁ MAL EL CATADO (Sin validar)
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function determineGroupValidationStatus(repetitionCount: number): {
+  status: ValidationStatus;
+  reason: string;
+} {
+  if (repetitionCount >= 2) {
+    return {
+      status: 'VALIDATED',
+      reason: `Está bien (salió en ${repetitionCount})`
+    };
+  }
+  return {
+    status: 'SINGLE',
+    reason: 'Está mal el catado (salió en 1)'
+  };
+}
+
+/**
+ * Obtiene el identificador único seguro del registro.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function getRecordIdentifier(record: AuditRecord): string {
+  return record.ID || record.DocId || `GENERATED_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
+ * Calcula el mapa de validación según la regla de negocio industrial:
  * - Misma muestra (Sample)
  * - Mismo Tanque (Tank) y mismo Remark (Remark) en la misma fecha
- * - Si salen en 2 y 3: ESTÁ BIEN (Validado)
- * - Si sale 1: ESTÁ MAL EL CATADO (Sin validar)
- * - Si sale en 0: Faltan columnas (Tank o Remark vacíos o '0')
+ * - Si salen en 2 y 3: ESTÁ BIEN (VALIDATED)
+ * - Si sale 1: ESTÁ MAL EL CATADO (SINGLE)
+ * - Si sale en 0: Faltan columnas (INCOMPLETE)
+ * Complejidad Ciclomática: 3 (< 7)
  */
 export function computeValidationMap(records: AuditRecord[]): Map<string, RecordValidationInfo> {
   const validationMap = new Map<string, RecordValidationInfo>();
+  const tastingGroups = new Map<string, AuditRecord[]>();
 
-  // 1. Agrupar registros válidos por Día + Sample + Tank + Remark
-  const groups = new Map<string, AuditRecord[]>();
-
+  // Paso 1: Clasificar incompletos o agrupar para validación
   for (const record of records) {
-    const tank = (record.Tank || '').trim();
-    const remark = (record.Remark || '').trim();
+    const rawTank = record.Tank || '';
+    const rawRemark = record.Remark || '';
+    const isTankMissing = isColumnFieldMissing(rawTank);
+    const isRemarkMissing = isColumnFieldMissing(rawRemark);
 
-    // Regla 0: Si sale en 0 es porque no completaron las columnas
-    const isTankEmpty = !tank || tank === '0' || tank === '-' || tank.toLowerCase() === 'sin tanque';
-    const isRemarkEmpty = !remark || remark === '0' || remark === '-' || remark.toLowerCase() === 'sin remark';
-
-    if (isTankEmpty || isRemarkEmpty) {
-      let missingReason = 'Faltan columnas: ';
-      if (isTankEmpty && isRemarkEmpty) missingReason += 'Tanque y Remark';
-      else if (isTankEmpty) missingReason += 'Tanque';
-      else missingReason += 'Remark';
-
-      const idKey = record.ID || record.DocId || Math.random().toString();
-      validationMap.set(idKey, {
+    if (isTankMissing || isRemarkMissing) {
+      const missingReason = buildMissingColumnsReason(isTankMissing, isRemarkMissing);
+      const recordIdentifier = getRecordIdentifier(record);
+      validationMap.set(recordIdentifier, {
         status: 'INCOMPLETE',
         count: 0,
         reason: missingReason,
-        groupKey: 'INCOMPLETE',
+        groupKey: 'INCOMPLETE'
       });
       continue;
     }
 
-    const dateKey = getRecordDateKey(record);
-    const sampleClean = (record.Sample || '').trim().toUpperCase();
-    const tankClean = tank.toUpperCase();
-    const remarkClean = remark.toUpperCase();
-
-    const groupKey = `${dateKey}___${sampleClean}___${tankClean}___${remarkClean}`;
-
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, []);
-    }
-    groups.get(groupKey)!.push(record);
+    const groupKey = buildTastingGroupKey(record, rawTank, rawRemark);
+    const existingGroup = tastingGroups.get(groupKey) || [];
+    existingGroup.push(record);
+    tastingGroups.set(groupKey, existingGroup);
   }
 
-  // 2. Evaluar el conteo de cada grupo
-  for (const [groupKey, groupRecords] of groups.entries()) {
-    const count = groupRecords.length;
+  // Paso 2: Evaluar cada grupo según la regla de negocio
+  for (const [groupKey, groupRecords] of tastingGroups.entries()) {
+    const groupCount = groupRecords.length;
+    const { status, reason } = determineGroupValidationStatus(groupCount);
 
-    let status: ValidationStatus = 'SINGLE';
-    let reason = 'Está mal el catado (salió en 1)';
-
-    if (count >= 2) {
-      status = 'VALIDATED';
-      reason = `Está bien (salió en ${count})`;
-    }
-
-    for (const rec of groupRecords) {
-      const idKey = rec.ID || rec.DocId || Math.random().toString();
-      validationMap.set(idKey, {
+    for (const groupRecord of groupRecords) {
+      const recordIdentifier = getRecordIdentifier(groupRecord);
+      validationMap.set(recordIdentifier, {
         status,
-        count,
+        count: groupCount,
         reason,
-        groupKey,
+        groupKey
       });
     }
   }
@@ -97,45 +160,73 @@ export function computeValidationMap(records: AuditRecord[]): Map<string, Record
   return validationMap;
 }
 
+interface TasterIncidentAccumulator {
+  singleCount: number;
+  incompleteCount: number;
+  sampleExamples: Set<string>;
+}
+
 /**
- * Calcula el resumen de incidentes por persona (catador)
+ * Registra un incidente de validación (Catado Mal o Faltan Columnas) para un catador.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+function recordTasterIncident(
+  accumulator: TasterIncidentAccumulator,
+  status: ValidationStatus,
+  sampleDescription: string
+): void {
+  if (status === 'SINGLE') {
+    accumulator.singleCount++;
+  } else if (status === 'INCOMPLETE') {
+    accumulator.incompleteCount++;
+  }
+
+  if (accumulator.sampleExamples.size < 3) {
+    accumulator.sampleExamples.add(sampleDescription);
+  }
+}
+
+/**
+ * Calcula el resumen de incidencias agrupadas por catador (panelista).
+ * Identifica quiénes tienen catas en 1 (Catado Mal) o en 0 (Faltan Columnas).
+ * Complejidad Ciclomática: 3 (< 7)
  */
 export function computeTasterIncidents(
   records: AuditRecord[],
   validationMap: Map<string, RecordValidationInfo>
 ): TasterValidationIncident[] {
-  const map = new Map<string, { singleCount: number; incompleteCount: number; samples: Set<string> }>();
+  const tasterIncidentMap = new Map<string, TasterIncidentAccumulator>();
 
-  for (const r of records) {
-    const idKey = r.ID || r.DocId;
-    const val = idKey ? validationMap.get(idKey) : undefined;
-    if (!val || val.status === 'VALIDATED') continue;
+  for (const record of records) {
+    const recordIdentifier = record.ID || record.DocId;
+    const validationInfo = recordIdentifier ? validationMap.get(recordIdentifier) : undefined;
 
-    const taster = (r.Taster || 'Sin Asignar').trim();
-    if (!map.has(taster)) {
-      map.set(taster, { singleCount: 0, incompleteCount: 0, samples: new Set() });
+    // Solo procesamos incidentes sin validar
+    if (!validationInfo || validationInfo.status === 'VALIDATED') {
+      continue;
     }
 
-    const item = map.get(taster)!;
-    if (val.status === 'SINGLE') {
-      item.singleCount++;
-    } else if (val.status === 'INCOMPLETE') {
-      item.incompleteCount++;
+    const tasterName = (record.Taster || 'Sin Asignar').trim();
+    if (!tasterIncidentMap.has(tasterName)) {
+      tasterIncidentMap.set(tasterName, {
+        singleCount: 0,
+        incompleteCount: 0,
+        sampleExamples: new Set<string>()
+      });
     }
 
-    const sampleLabel = `${r.Sample} [${r.Tank || 'Sin Tanque'}]`;
-    if (item.samples.size < 3) {
-      item.samples.add(sampleLabel);
-    }
+    const tasterData = tasterIncidentMap.get(tasterName)!;
+    const sampleDescription = `${record.Sample || 'Muestra'} [${record.Tank || 'Sin Tanque'}]`;
+    recordTasterIncident(tasterData, validationInfo.status, sampleDescription);
   }
 
-  return Array.from(map.entries())
-    .map(([taster, data]) => ({
+  return Array.from(tasterIncidentMap.entries())
+    .map(([taster, incidentData]) => ({
       taster,
-      singleCount: data.singleCount,
-      incompleteCount: data.incompleteCount,
-      totalIncidents: data.singleCount + data.incompleteCount,
-      sampleExamples: Array.from(data.samples),
+      singleCount: incidentData.singleCount,
+      incompleteCount: incidentData.incompleteCount,
+      totalIncidents: incidentData.singleCount + incidentData.incompleteCount,
+      sampleExamples: Array.from(incidentData.sampleExamples)
     }))
-    .sort((a, b) => b.totalIncidents - a.totalIncidents);
+    .sort((incidentA, incidentB) => incidentB.totalIncidents - incidentA.totalIncidents);
 }

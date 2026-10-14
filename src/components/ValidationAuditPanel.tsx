@@ -18,14 +18,71 @@ import {
 
 interface ValidationAuditPanelProps {
   records: AuditRecord[];
-  selectedDate: string; // 'ALL' o 'YYYY-MM-DD'
-  onSelectDate: (date: string) => void;
+  selectedDate: string; // 'ALL' o formato 'YYYY-MM-DD'
+  onSelectDate: (selectedDate: string) => void;
   activeValidationFilter: 'ALL' | ValidationStatus;
   onSelectValidationFilter: (filter: 'ALL' | ValidationStatus) => void;
   selectedTasterIncident: string | null;
-  onSelectTasterIncident: (taster: string | null) => void;
+  onSelectTasterIncident: (tasterName: string | null) => void;
 }
 
+interface ValidationMetrics {
+  total: number;
+  validated: number;
+  single: number;
+  incomplete: number;
+  totalUnvalidated: number;
+  validatedPercent: string;
+  singlePercent: string;
+  incompletePercent: string;
+}
+
+/**
+ * Calcula las métricas resumidas de validación para un conjunto de registros.
+ * Complejidad Ciclomática: 4 (< 7)
+ */
+function computeScopeValidationMetrics(
+  scopedRecords: AuditRecord[],
+  validationMap: ReturnType<typeof computeValidationMap>
+): ValidationMetrics {
+  let validatedCount = 0;
+  let singleCount = 0;
+  let incompleteCount = 0;
+
+  for (const record of scopedRecords) {
+    const recordIdentifier = record.ID || record.DocId;
+    const validationInfo = recordIdentifier ? validationMap.get(recordIdentifier) : undefined;
+    if (!validationInfo) continue;
+
+    if (validationInfo.status === 'VALIDATED') {
+      validatedCount++;
+    } else if (validationInfo.status === 'SINGLE') {
+      singleCount++;
+    } else if (validationInfo.status === 'INCOMPLETE') {
+      incompleteCount++;
+    }
+  }
+
+  const totalCount = scopedRecords.length;
+  const calculatePercent = (count: number): string =>
+    totalCount > 0 ? ((count / totalCount) * 100).toFixed(1) : '0';
+
+  return {
+    total: totalCount,
+    validated: validatedCount,
+    single: singleCount,
+    incomplete: incompleteCount,
+    totalUnvalidated: singleCount + incompleteCount,
+    validatedPercent: calculatePercent(validatedCount),
+    singlePercent: calculatePercent(singleCount),
+    incompletePercent: calculatePercent(incompleteCount),
+  };
+}
+
+/**
+ * Panel de Auditoría Diaria y Validación (Regla 2-3 / 1 / 0).
+ * Muestra el semáforo de estado de catados y los panelistas con muestras pendientes de validar.
+ */
 export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
   records,
   selectedDate,
@@ -35,57 +92,35 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
   selectedTasterIncident,
   onSelectTasterIncident,
 }) => {
-  // Lista de fechas únicas disponibles
+  // Extrae y ordena las fechas únicas disponibles
   const availableDates = useMemo(() => {
-    const set = new Set<string>();
-    records.forEach((r) => {
-      const d = getRecordDateKey(r);
-      if (d !== 'SIN_FECHA') set.add(d);
+    const uniqueDateSet = new Set<string>();
+    records.forEach((record) => {
+      const dateKey = getRecordDateKey(record);
+      if (dateKey !== 'SIN_FECHA') {
+        uniqueDateSet.add(dateKey);
+      }
     });
-    return Array.from(set).sort().reverse();
+    return Array.from(uniqueDateSet).sort().reverse();
   }, [records]);
 
-  // Registros del día seleccionado ("este día") o periodo actual
+  // Filtra los registros que corresponden al alcance de fecha actual
   const recordsInDateScope = useMemo(() => {
     if (selectedDate === 'ALL') return records;
-    return records.filter((r) => getRecordDateKey(r) === selectedDate);
+    return records.filter((record) => getRecordDateKey(record) === selectedDate);
   }, [records, selectedDate]);
 
-  // Mapa de validación calculado
+  // Mapa de validación evaluado por la regla 2-3 / 1 / 0
   const validationMap = useMemo(() => {
     return computeValidationMap(recordsInDateScope);
   }, [recordsInDateScope]);
 
-  // Contadores
-  const stats = useMemo(() => {
-    let validated = 0;
-    let single = 0;
-    let incomplete = 0;
-
-    for (const r of recordsInDateScope) {
-      const idKey = r.ID || r.DocId;
-      const info = idKey ? validationMap.get(idKey) : undefined;
-      if (!info) continue;
-
-      if (info.status === 'VALIDATED') validated++;
-      else if (info.status === 'SINGLE') single++;
-      else if (info.status === 'INCOMPLETE') incomplete++;
-    }
-
-    const total = recordsInDateScope.length;
-    return {
-      total,
-      validated,
-      single,
-      incomplete,
-      totalUnvalidated: single + incomplete,
-      validatedPercent: total > 0 ? ((validated / total) * 100).toFixed(1) : '0',
-      singlePercent: total > 0 ? ((single / total) * 100).toFixed(1) : '0',
-      incompletePercent: total > 0 ? ((incomplete / total) * 100).toFixed(1) : '0',
-    };
+  // Métricas estadísticas del periodo seleccionado
+  const validationMetrics = useMemo(() => {
+    return computeScopeValidationMetrics(recordsInDateScope, validationMap);
   }, [recordsInDateScope, validationMap]);
 
-  // Catadores con incidencias
+  // Lista de catadores con incidencias
   const tasterIncidents = useMemo(() => {
     return computeTasterIncidents(recordsInDateScope, validationMap);
   }, [recordsInDateScope, validationMap]);
@@ -93,7 +128,7 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
   return (
     <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-4 lg:p-5 shadow-sm dark:shadow-xl space-y-4 transition-colors">
       
-      {/* Cabecera Limpia */}
+      {/* Cabecera del Panel */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
         <div>
           <div className="flex items-center gap-2">
@@ -104,14 +139,14 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             {selectedDate === 'ALL' ? (
-              <span>Periodo actual: <strong>{stats.totalUnvalidated.toLocaleString()}</strong> catados sin validar (en 1 o en 0).</span>
+              <span>Periodo actual: <strong>{validationMetrics.totalUnvalidated.toLocaleString()}</strong> catados sin validar (en 1 o en 0).</span>
             ) : (
-              <span>En este día ({selectedDate}) tienes <strong>{stats.totalUnvalidated}</strong> catados sin validar (en 1 o en 0).</span>
+              <span>En este día ({selectedDate}) tienes <strong>{validationMetrics.totalUnvalidated}</strong> catados sin validar (en 1 o en 0).</span>
             )}
           </p>
         </div>
 
-        {/* Selector de Día */}
+        {/* Selector de Fecha */}
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <label className="text-xs font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1.5">
             <Calendar className="w-3.5 h-3.5 text-amber-500" />
@@ -119,16 +154,16 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
           </label>
           <select
             value={selectedDate}
-            onChange={(e) => {
-              onSelectDate(e.target.value);
+            onChange={(changeEvent) => {
+              onSelectDate(changeEvent.target.value);
               onSelectTasterIncident(null);
             }}
             className="bg-slate-50 dark:bg-[#070A12] border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:border-amber-400 transition-colors"
           >
             <option value="ALL">Todo el periodo</option>
-            {availableDates.map((dateStr) => (
-              <option key={dateStr} value={dateStr}>
-                {dateStr}
+            {availableDates.map((dateString) => (
+              <option key={dateString} value={dateString}>
+                {dateString}
               </option>
             ))}
           </select>
@@ -153,10 +188,10 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
               <CheckCircle2 className="w-4 h-4 text-emerald-500" />
               Está Bien (2 y 3)
             </span>
-            <span>{stats.validatedPercent}%</span>
+            <span>{validationMetrics.validatedPercent}%</span>
           </div>
           <div className="text-2xl font-black text-slate-900 dark:text-white mt-1">
-            {stats.validated.toLocaleString()}
+            {validationMetrics.validated.toLocaleString()}
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
             Catados validados correctamente
@@ -178,10 +213,10 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
               <AlertTriangle className="w-4 h-4 text-amber-500" />
               Está Mal el Catado (1)
             </span>
-            <span>{stats.singlePercent}%</span>
+            <span>{validationMetrics.singlePercent}%</span>
           </div>
           <div className="text-2xl font-black text-slate-900 dark:text-white mt-1">
-            {stats.single.toLocaleString()}
+            {validationMetrics.single.toLocaleString()}
           </div>
           <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
             Salió en 1: catado no validado
@@ -203,10 +238,10 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
               <XCircle className="w-4 h-4 text-rose-500" />
               Faltan Columnas (0)
             </span>
-            <span>{stats.incompletePercent}%</span>
+            <span>{validationMetrics.incompletePercent}%</span>
           </div>
           <div className="text-2xl font-black text-slate-900 dark:text-white mt-1">
-            {stats.incomplete.toLocaleString()}
+            {validationMetrics.incomplete.toLocaleString()}
           </div>
           <div className="text-[11px] text-rose-700 dark:text-rose-400 mt-0.5">
             Salió en 0: no completaron Tanque o Remark
@@ -241,29 +276,29 @@ export const ValidationAuditPanel: React.FC<ValidationAuditPanelProps> = ({
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {tasterIncidents.map((inc) => {
-              const isSelected = selectedTasterIncident === inc.taster;
+            {tasterIncidents.map((incident) => {
+              const isSelected = selectedTasterIncident === incident.taster;
               return (
                 <button
-                  key={inc.taster}
-                  onClick={() => onSelectTasterIncident(isSelected ? null : inc.taster)}
+                  key={incident.taster}
+                  onClick={() => onSelectTasterIncident(isSelected ? null : incident.taster)}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
                     isSelected
                       ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-sm font-bold ring-2 ring-amber-400/30'
                       : 'bg-slate-50 hover:bg-slate-100 dark:bg-[#070A12] dark:hover:bg-[#111A2E] border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
                   }`}
-                  title={`Clic para ver las ${inc.totalIncidents} muestras de ${inc.taster}`}
+                  title={`Clic para ver las ${incident.totalIncidents} muestras de ${incident.taster}`}
                 >
-                  <span className="truncate max-w-[180px]">{inc.taster}</span>
+                  <span className="truncate max-w-[180px]">{incident.taster}</span>
                   <div className="flex items-center gap-1 text-[11px]">
-                    {inc.singleCount > 0 && (
+                    {incident.singleCount > 0 && (
                       <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-800 dark:text-amber-300 font-bold">
-                        {inc.singleCount} mal (1)
+                        {incident.singleCount} mal (1)
                       </span>
                     )}
-                    {inc.incompleteCount > 0 && (
+                    {incident.incompleteCount > 0 && (
                       <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-800 dark:text-rose-300 font-bold">
-                        {inc.incompleteCount} vacíos (0)
+                        {incident.incompleteCount} vacíos (0)
                       </span>
                     )}
                   </div>

@@ -18,9 +18,84 @@ interface AuditDetailTableProps {
   activeValidationFilter?: 'ALL' | ValidationStatus;
   onSelectValidationFilter?: (filter: 'ALL' | ValidationStatus) => void;
   selectedTasterIncident?: string | null;
-  onSelectTasterIncident?: (taster: string | null) => void;
+  onSelectTasterIncident?: (tasterName: string | null) => void;
 }
 
+/**
+ * Valida si un remark tiene contenido textual significativo.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+function hasSignificantRemark(remark: string | undefined): boolean {
+  if (!remark) return false;
+  const trimmedRemark = remark.trim();
+  return trimmedRemark !== '' && trimmedRemark !== '-' && trimmedRemark !== '0';
+}
+
+/**
+ * Filtra los registros que se mostrarán en la tabla combinando catador, estado de validación y remarks.
+ * Complejidad Ciclomática: 4 (< 7)
+ */
+function filterTableRecords(
+  sourceRecords: AuditRecord[],
+  selectedTaster: string | null,
+  activeFilter: 'ALL' | ValidationStatus,
+  validationMap?: Map<string, RecordValidationInfo>,
+  onlyWithRemarks?: boolean
+): AuditRecord[] {
+  return sourceRecords.filter((record) => {
+    if (selectedTaster && record.Taster !== selectedTaster) {
+      return false;
+    }
+
+    if (activeFilter !== 'ALL' && validationMap) {
+      const recordIdentifier = record.ID || record.DocId;
+      const validationInfo = recordIdentifier ? validationMap.get(recordIdentifier) : undefined;
+      if (validationInfo?.status !== activeFilter) {
+        return false;
+      }
+    }
+
+    if (onlyWithRemarks && !hasSignificantRemark(record.Remark)) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Calcula los totales por cada tipo de validación para las pastillas informativas.
+ * Complejidad Ciclomática: 4 (< 7)
+ */
+function computeValidationStatusCounts(
+  records: AuditRecord[],
+  validationMap?: Map<string, RecordValidationInfo>
+): { validated: number; single: number; incomplete: number } {
+  if (!validationMap) return { validated: 0, single: 0, incomplete: 0 };
+
+  let validatedCount = 0;
+  let singleCount = 0;
+  let incompleteCount = 0;
+
+  for (const record of records) {
+    const recordIdentifier = record.ID || record.DocId;
+    const validationInfo = recordIdentifier ? validationMap.get(recordIdentifier) : undefined;
+
+    if (validationInfo?.status === 'VALIDATED') {
+      validatedCount++;
+    } else if (validationInfo?.status === 'SINGLE') {
+      singleCount++;
+    } else if (validationInfo?.status === 'INCOMPLETE') {
+      incompleteCount++;
+    }
+  }
+
+  return { validated: validatedCount, single: singleCount, incomplete: incompleteCount };
+}
+
+/**
+ * Tabla detallada con paginación optimizada (12 registros por página).
+ */
 export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
   records,
   validationMap,
@@ -35,25 +110,13 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
 
   // Filtrado reactivo de la tabla combinando validación, catador y remark
   const recordsToDisplay = useMemo(() => {
-    let result = records;
-
-    if (selectedTasterIncident) {
-      result = result.filter((r) => r.Taster === selectedTasterIncident);
-    }
-
-    if (activeValidationFilter !== 'ALL' && validationMap) {
-      result = result.filter((r) => {
-        const idKey = r.ID || r.DocId;
-        const info = idKey ? validationMap.get(idKey) : undefined;
-        return info?.status === activeValidationFilter;
-      });
-    }
-
-    if (onlyWithRemarks) {
-      result = result.filter((r) => r.Remark && r.Remark.trim() !== '' && r.Remark.trim() !== '-');
-    }
-
-    return result;
+    return filterTableRecords(
+      records,
+      selectedTasterIncident,
+      activeValidationFilter,
+      validationMap,
+      onlyWithRemarks
+    );
   }, [records, selectedTasterIncident, activeValidationFilter, validationMap, onlyWithRemarks]);
 
   // Resetear a página 1 automáticamente cuando cambian los registros o filtros aplicados
@@ -65,36 +128,24 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
   const currentRecords = useMemo(() => {
-    return recordsToDisplay.slice(
-      (safePage - 1) * pageSize,
-      safePage * pageSize
-    );
+    const startIndex = (safePage - 1) * pageSize;
+    return recordsToDisplay.slice(startIndex, startIndex + pageSize);
   }, [recordsToDisplay, safePage, pageSize]);
 
-  // Contadores para pastillas
+  // Contador de registros con observación
   const countWithRemarks = useMemo(() => {
-    return records.filter((r) => r.Remark && r.Remark.trim() !== '' && r.Remark.trim() !== '-').length;
+    return records.filter((record) => hasSignificantRemark(record.Remark)).length;
   }, [records]);
 
+  // Conteo de registros por estado de validación
   const countsByStatus = useMemo(() => {
-    if (!validationMap) return { validated: 0, single: 0, incomplete: 0 };
-    let validated = 0;
-    let single = 0;
-    let incomplete = 0;
-    for (const r of records) {
-      const idKey = r.ID || r.DocId;
-      const info = idKey ? validationMap.get(idKey) : undefined;
-      if (info?.status === 'VALIDATED') validated++;
-      else if (info?.status === 'SINGLE') single++;
-      else if (info?.status === 'INCOMPLETE') incomplete++;
-    }
-    return { validated, single, incomplete };
+    return computeValidationStatusCounts(records, validationMap);
   }, [records, validationMap]);
 
   return (
     <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-5 shadow-sm dark:shadow-xl transition-colors space-y-4">
       
-      {/* Cabecera */}
+      {/* Cabecera y Controles */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
         <div>
           <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -108,141 +159,119 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
           </p>
         </div>
 
-        {/* Acciones y Paginación */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          
-          {/* Paginación */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              Página <strong className="text-slate-900 dark:text-white">{safePage}</strong> de {totalPages}
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={safePage === 1}
-                className="p-1.5 rounded-lg bg-slate-100 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Página anterior"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={safePage === totalPages}
-                className="p-1.5 rounded-lg bg-slate-100 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="Página siguiente"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
+        {/* Paginación */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            Página <strong className="text-slate-900 dark:text-white">{safePage}</strong> de {totalPages}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentPage((previousPage) => Math.max(1, previousPage - 1))}
+              disabled={safePage === 1}
+              className="p-1.5 rounded-lg bg-slate-100 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Página anterior"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setCurrentPage((previousPage) => Math.min(totalPages, previousPage + 1))}
+              disabled={safePage === totalPages}
+              className="p-1.5 rounded-lg bg-slate-100 dark:bg-[#070A12] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Página siguiente"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
-
         </div>
       </div>
 
-      {/* Pastillas de Filtro Rápido de Validación */}
+      {/* Pastillas de Filtro Rápido */}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-slate-400 dark:text-slate-500 font-semibold uppercase text-[10px] mr-1 flex items-center gap-1">
           <Filter className="w-3 h-3" /> Filtro:
         </span>
 
-        {/* Todos */}
+        {/* Todas */}
         <button
           onClick={() => {
             if (onSelectValidationFilter) onSelectValidationFilter('ALL');
-            if (onSelectTasterIncident) onSelectTasterIncident(null);
             setOnlyWithRemarks(false);
-            setCurrentPage(1);
+            if (onSelectTasterIncident) onSelectTasterIncident(null);
           }}
           className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-            activeValidationFilter === 'ALL' && !selectedTasterIncident && !onlyWithRemarks
-              ? 'bg-slate-900 text-white dark:bg-slate-700 shadow-sm'
-              : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            activeValidationFilter === 'ALL' && !onlyWithRemarks && !selectedTasterIncident
+              ? 'bg-slate-800 text-white dark:bg-slate-700'
+              : 'bg-slate-100 hover:bg-slate-200 dark:bg-[#070A12] dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400'
           }`}
         >
-          Todos ({records.length.toLocaleString()})
+          Todas ({records.length.toLocaleString()})
         </button>
 
-        {/* ⚠️ Catado Mal (1) */}
+        {/* Está Bien (2-3) */}
         {onSelectValidationFilter && (
           <button
-            onClick={() => {
-              onSelectValidationFilter(activeValidationFilter === 'SINGLE' ? 'ALL' : 'SINGLE');
-              setCurrentPage(1);
-            }}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold transition-all border ${
-              activeValidationFilter === 'SINGLE'
-                ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-sm'
-                : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/40 text-amber-700 dark:text-amber-400 hover:bg-amber-100'
-            }`}
-            title="Ver muestras que salieron en 1 (Está mal el catado)"
-          >
-            <AlertTriangle className="w-3 h-3" />
-            <span>Catado Mal 1 ({countsByStatus.single.toLocaleString()})</span>
-          </button>
-        )}
-
-        {/* ❌ Faltan Columnas (0) */}
-        {onSelectValidationFilter && (
-          <button
-            onClick={() => {
-              onSelectValidationFilter(activeValidationFilter === 'INCOMPLETE' ? 'ALL' : 'INCOMPLETE');
-              setCurrentPage(1);
-            }}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold transition-all border ${
-              activeValidationFilter === 'INCOMPLETE'
-                ? 'bg-rose-500 text-white border-rose-500 shadow-sm'
-                : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/40 text-rose-700 dark:text-rose-400 hover:bg-rose-100'
-            }`}
-            title="Ver muestras que salieron en 0 (No completaron Tanque o Remark)"
-          >
-            <XCircle className="w-3 h-3" />
-            <span>Faltan Col. 0 ({countsByStatus.incomplete.toLocaleString()})</span>
-          </button>
-        )}
-
-        {/* ✅ Está Bien (2 y 3) */}
-        {onSelectValidationFilter && (
-          <button
-            onClick={() => {
-              onSelectValidationFilter(activeValidationFilter === 'VALIDATED' ? 'ALL' : 'VALIDATED');
-              setCurrentPage(1);
-            }}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold transition-all border ${
+            onClick={() => onSelectValidationFilter(activeValidationFilter === 'VALIDATED' ? 'ALL' : 'VALIDATED')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold transition-all ${
               activeValidationFilter === 'VALIDATED'
-                ? 'bg-emerald-500 text-white border-emerald-500 shadow-sm'
-                : 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100'
+                ? 'bg-emerald-500 text-white font-bold shadow-sm'
+                : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800'
             }`}
-            title="Ver muestras que salieron en 2 o 3 (Está bien)"
           >
-            <CheckCircle2 className="w-3 h-3" />
-            <span>Está Bien 2-3 ({countsByStatus.validated.toLocaleString()})</span>
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Está Bien (2-3) ({countsByStatus.validated.toLocaleString()})</span>
           </button>
         )}
 
-        {/* 💬 Solo con Remark */}
+        {/* Catado Mal (1) */}
+        {onSelectValidationFilter && (
+          <button
+            onClick={() => onSelectValidationFilter(activeValidationFilter === 'SINGLE' ? 'ALL' : 'SINGLE')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold transition-all ${
+              activeValidationFilter === 'SINGLE'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
+                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>Catado Mal (1) ({countsByStatus.single.toLocaleString()})</span>
+          </button>
+        )}
+
+        {/* Faltan Columnas (0) */}
+        {onSelectValidationFilter && (
+          <button
+            onClick={() => onSelectValidationFilter(activeValidationFilter === 'INCOMPLETE' ? 'ALL' : 'INCOMPLETE')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold transition-all ${
+              activeValidationFilter === 'INCOMPLETE'
+                ? 'bg-rose-500 text-white font-bold shadow-sm'
+                : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800'
+            }`}
+          >
+            <XCircle className="w-3.5 h-3.5" />
+            <span>Faltan Col. (0) ({countsByStatus.incomplete.toLocaleString()})</span>
+          </button>
+        )}
+
+        {/* Con Remark */}
         <button
-          onClick={() => {
-            setOnlyWithRemarks(!onlyWithRemarks);
-            setCurrentPage(1);
-          }}
-          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold transition-all border ${
+          onClick={() => setOnlyWithRemarks((previousValue) => !previousValue)}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold transition-all ${
             onlyWithRemarks
-              ? 'bg-sky-500 text-white border-sky-500 font-bold shadow-sm'
-              : 'bg-slate-100 dark:bg-[#070A12] border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-sky-400'
+              ? 'bg-sky-500 text-white font-bold shadow-sm'
+              : 'bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-400 dark:border-sky-800'
           }`}
-          title="Ver solo muestras con texto en Remark"
         >
-          <MessageSquare className="w-3 h-3 text-sky-500" />
+          <MessageSquare className="w-3.5 h-3.5" />
           <span>Con Remark ({countWithRemarks.toLocaleString()})</span>
         </button>
 
-        {/* Pastilla de Catador Seleccionado */}
+        {/* Indicador de Filtro por Catador Activo */}
         {selectedTasterIncident && onSelectTasterIncident && (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold text-xs shadow-sm">
-            <span>Catador: {selectedTasterIncident}</span>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold bg-amber-400/20 text-amber-800 dark:text-amber-300 border border-amber-400/40">
+            <span>Catador: <strong>{selectedTasterIncident}</strong></span>
             <button
               onClick={() => onSelectTasterIncident(null)}
-              className="p-0.5 hover:bg-amber-600 rounded"
+              className="hover:opacity-75 p-0.5"
               title="Quitar filtro de catador"
             >
               <X className="w-3 h-3" />
@@ -269,25 +298,27 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-slate-700 dark:text-slate-300">
-            {currentRecords.map((item, idx) => {
-              const idKey = item.ID || item.DocId;
-              const val = idKey && validationMap ? validationMap.get(idKey) : undefined;
+            {currentRecords.map((record, index) => {
+              const recordIdentifier = record.ID || record.DocId;
+              const validationInfo = recordIdentifier && validationMap ? validationMap.get(recordIdentifier) : undefined;
+              const hasValidTank = Boolean(record.Tank && record.Tank.trim() !== '' && record.Tank !== '0' && record.Tank !== '-');
+              const hasRemark = Boolean(record.Remark && record.Remark.trim() !== '' && record.Remark.trim() !== '-' && record.Remark !== '0');
 
               return (
-                <tr key={(item.ID || idx) + String(idx)} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                <tr key={`${record.ID || index}_${index}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                   <td className="py-2.5 px-3 font-mono font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                    {item.ID}
+                    {record.ID}
                   </td>
                   <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
-                    {item.Taster}
+                    {record.Taster}
                   </td>
                   <td className="py-2.5 px-3 text-slate-700 dark:text-slate-200">
-                    {item.Sample}
+                    {record.Sample}
                   </td>
                   <td className="py-2.5 px-3 font-mono text-slate-700 dark:text-slate-300">
-                    {item.Tank && item.Tank.trim() !== '' && item.Tank !== '0' && item.Tank !== '-' ? (
+                    {hasValidTank ? (
                       <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-semibold border border-slate-200 dark:border-slate-700">
-                        {item.Tank}
+                        {record.Tank}
                       </span>
                     ) : (
                       <span className="text-rose-500 font-bold text-[11px]">Sin Tanque (0)</span>
@@ -295,23 +326,23 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
                   </td>
                   <td className="py-2.5 px-3 whitespace-nowrap">
                     <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                      {item.Shift}
+                      {record.Shift}
                     </span>
                   </td>
                   <td className="py-2.5 px-3">
                     <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                      item.Area === 'CFR'
+                      record.Area === 'CFR'
                         ? 'bg-sky-50 dark:bg-sky-950/80 text-sky-700 dark:text-sky-400 border border-sky-200 dark:border-sky-800/50'
                         : 'bg-amber-50 dark:bg-amber-950/80 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50'
                     }`}>
-                      {item.Area}
+                      {record.Area}
                     </span>
                   </td>
                   <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                    Sem {item.SEMANA} • M{item.MES}
+                    Sem {record.SEMANA} • M{record.MES}
                   </td>
                   <td className="py-2.5 px-3 text-center">
-                    {item.OKNOK === 'OK' ? (
+                    {record.OKNOK === 'OK' ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50">
                         <CheckCircle2 className="w-3 h-3" />
                         OK
@@ -324,15 +355,15 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
                     )}
                   </td>
                   <td className="py-2.5 px-3">
-                    {item.Remark && item.Remark.trim() !== '' && item.Remark.trim() !== '-' && item.Remark !== '0' ? (
-                      item.OKNOK === 'NOK' ? (
+                    {hasRemark ? (
+                      record.OKNOK === 'NOK' ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800/50 shadow-sm">
                           <AlertTriangle className="w-3 h-3 text-rose-500 flex-shrink-0" />
-                          <span>{item.Remark}</span>
+                          <span>{record.Remark}</span>
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                          {item.Remark}
+                          {record.Remark}
                         </span>
                       )
                     ) : (
@@ -340,21 +371,21 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
                     )}
                   </td>
                   
-                  {/* Nueva Columna de Validación */}
+                  {/* Columna de Validación del Panel Sensorial */}
                   <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                    {val ? (
-                      val.status === 'VALIDATED' ? (
+                    {validationInfo ? (
+                      validationInfo.status === 'VALIDATED' ? (
                         <span
                           className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50"
-                          title={val.reason}
+                          title={validationInfo.reason}
                         >
                           <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                          <span>Está Bien ({val.count})</span>
+                          <span>Está Bien ({validationInfo.count})</span>
                         </span>
-                      ) : val.status === 'SINGLE' ? (
+                      ) : validationInfo.status === 'SINGLE' ? (
                         <span
                           className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50"
-                          title={val.reason}
+                          title={validationInfo.reason}
                         >
                           <AlertTriangle className="w-3 h-3 text-amber-500" />
                           <span>Catado Mal (1)</span>
@@ -362,7 +393,7 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
                       ) : (
                         <span
                           className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/50"
-                          title={val.reason}
+                          title={validationInfo.reason}
                         >
                           <XCircle className="w-3 h-3 text-rose-500" />
                           <span>Faltan Col. (0)</span>

@@ -15,20 +15,121 @@ import { saveCachedAudits } from './services/indexedDbCache';
 import { computeValidationMap } from './utils/validationRules';
 import { Database, UploadCloud, RefreshCw, AlertTriangle, Trash2, CheckCircle2 } from 'lucide-react';
 
-const normalizeSearchText = (str: any): string => {
-  return String(str ?? '')
+/**
+ * Normaliza cadenas de texto para búsqueda: elimina acentos y unifica a minúsculas.
+ * Complejidad Ciclomática: 1 (< 7)
+ */
+function normalizeSearchText(inputText: unknown): string {
+  return String(inputText ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .trim();
-};
+}
 
+/**
+ * Valida si un registro coincide con el año seleccionado.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+function isMatchingYear(record: AuditRecord, selectedYear: number | 'ALL'): boolean {
+  if (selectedYear === 'ALL') return true;
+  const yearString = String(selectedYear);
+  const matchesIdYear = record.ID.includes(`-${yearString}-`);
+  const matchesFechadorYear = Boolean(record.FECHADOR && record.FECHADOR.startsWith(yearString));
+  return matchesIdYear || matchesFechadorYear;
+}
+
+/**
+ * Valida si un registro coincide con un valor de filtro categórico (Mes, Semana, Área, Turno, Estado).
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function isMatchingFilterValue<T>(recordValue: T, filterValue: T | 'ALL'): boolean {
+  return filterValue === 'ALL' || recordValue === filterValue;
+}
+
+/**
+ * Valida si un registro contiene todas las palabras clave (tokens) ingresadas en el buscador.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function isMatchingSearchTokens(record: AuditRecord, queryTokens: string[]): boolean {
+  if (queryTokens.length === 0) return true;
+  const searchableText = normalizeSearchText(
+    `${record.ID || ''} ${record.Taster || ''} ${record.Sample || ''} ${record.Tank || ''} ${record.Remark || ''} ${record.Area || ''} ${record.Shift || ''} ${record.Brand || ''} ${record.Site || ''}`
+  );
+  return queryTokens.every((token) => searchableText.includes(token));
+}
+
+/**
+ * Evalúa el conjunto de filtros aplicados sobre un registro de auditoría.
+ * Complejidad Ciclomática: 1 (< 7)
+ */
+function isRecordMatchingFilters(
+  record: AuditRecord,
+  filters: FilterState,
+  queryTokens: string[]
+): boolean {
+  return (
+    isMatchingYear(record, filters.year) &&
+    isMatchingFilterValue(record.MES, filters.month) &&
+    isMatchingFilterValue(record.SEMANA, filters.week) &&
+    isMatchingFilterValue(record.Area, filters.area) &&
+    isMatchingFilterValue(record.Shift, filters.shift) &&
+    isMatchingFilterValue(record.OKNOK, filters.status) &&
+    isMatchingSearchTokens(record, queryTokens)
+  );
+}
+
+/**
+ * Guarda una lista de identificadores excluidos en el almacenamiento local permanente.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function saveExcludedDocumentIdsLocally(newDocumentIds: string[]): void {
+  try {
+    const storedIdsJson = localStorage.getItem('MAZ_EXCLUDED_DOC_IDS');
+    const existingIds: string[] = storedIdsJson ? JSON.parse(storedIdsJson) : [];
+    const mergedUniqueIds = Array.from(new Set([...existingIds, ...newDocumentIds]));
+    localStorage.setItem('MAZ_EXCLUDED_DOC_IDS', JSON.stringify(mergedUniqueIds));
+  } catch (error) {
+    console.warn('Error al persistir IDs excluidos en localStorage:', error);
+  }
+}
+
+/**
+ * Obtiene el conjunto de identificadores excluidos desde el almacenamiento local.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function getExcludedDocumentIdsSet(): Set<string> {
+  try {
+    const storedIdsJson = localStorage.getItem('MAZ_EXCLUDED_DOC_IDS');
+    return storedIdsJson ? new Set(JSON.parse(storedIdsJson)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Filtra los registros excluidos según la lista persistida en el navegador.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function removeExcludedRecords(records: AuditRecord[], excludedSet: Set<string>): AuditRecord[] {
+  if (excludedSet.size === 0) return records;
+  return records.filter((record) => {
+    const recordIdentifier = (record.DocId || record.ID || '').trim();
+    return !excludedSet.has(recordIdentifier);
+  });
+}
+
+/**
+ * Componente Principal del Dashboard de Auditoría Sensorial MAZ.
+ */
 export function App() {
   const [allRecords, setAllRecords] = useState<AuditRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedValidationDate, setSelectedValidationDate] = useState<string>('ALL');
   const [activeValidationFilter, setActiveValidationFilter] = useState<'ALL' | ValidationStatus>('ALL');
   const [selectedTasterIncident, setSelectedTasterIncident] = useState<string | null>(null);
+
+  // Manejo de tema claro / oscuro persistente
   const [isDark, setIsDark] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('THEME_MODE') === 'dark';
@@ -46,6 +147,7 @@ export function App() {
     }
   }, [isDark]);
 
+  // Estado global de filtros
   const [filters, setFilters] = useState<FilterState>({
     year: 'ALL',
     month: 'ALL',
@@ -56,46 +158,29 @@ export function App() {
     tasterSearch: '',
   });
 
-  // Cargar datos en vivo o mock data
+  // Suscripción inteligente en vivo (Cache-First)
   useEffect(() => {
     setLoading(true);
-    const unsubscribe = subscribeToAudits((data) => {
-      try {
-        const stored = localStorage.getItem('MAZ_EXCLUDED_DOC_IDS');
-        if (stored) {
-          const excludedSet = new Set(JSON.parse(stored));
-          data = data.filter((r) => {
-            const id = (r.DocId || r.ID || '').trim();
-            return !excludedSet.has(id);
-          });
-        }
-      } catch {
-        // ignore
-      }
-      setAllRecords(data);
+    const unsubscribe = subscribeToAudits((incomingData) => {
+      const excludedIdsSet = getExcludedDocumentIdsSet();
+      const sanitizedData = removeExcludedRecords(incomingData, excludedIdsSet);
+      setAllRecords(sanitizedData);
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
 
+  /**
+   * Sincronización manual bajo demanda desde Firebase Cloud
+   */
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      let freshData = await forceFullCloudSync();
-      try {
-        const stored = localStorage.getItem('MAZ_EXCLUDED_DOC_IDS');
-        if (stored) {
-          const excludedSet = new Set(JSON.parse(stored));
-          freshData = freshData.filter((r) => {
-            const id = (r.DocId || r.ID || '').trim();
-            return !excludedSet.has(id);
-          });
-        }
-      } catch {
-        // ignore
-      }
-      setAllRecords(freshData);
+      const freshCloudData = await forceFullCloudSync();
+      const excludedIdsSet = getExcludedDocumentIdsSet();
+      const sanitizedData = removeExcludedRecords(freshCloudData, excludedIdsSet);
+      setAllRecords(sanitizedData);
     } catch {
       setAllRecords([]);
     } finally {
@@ -103,10 +188,10 @@ export function App() {
     }
   };
 
-  // Registros que tienen error #N/D en el Área (por fórmulas incompletas de Excel)
+  // Detección de registros con Área #N/D (fórmulas de Excel incompletas)
   const ndAreaRecords = useMemo(() => {
-    return allRecords.filter((r) => {
-      const area = (r.Area || '').trim();
+    return allRecords.filter((record) => {
+      const area = (record.Area || '').trim();
       return area === '#N/D' || area.includes('#N/D');
     });
   }, [allRecords]);
@@ -114,151 +199,114 @@ export function App() {
   const [isDeletingNd, setIsDeletingNd] = useState(false);
   const [deleteSuccessMsg, setDeleteSuccessMsg] = useState<string | null>(null);
 
+  /**
+   * Elimina las muestras con área #N/D de memoria, caché y Firebase
+   * Complejidad Ciclomática: 4 (< 7)
+   */
   const handleDeleteNdRecords = async () => {
     if (ndAreaRecords.length === 0) return;
 
-    const count = ndAreaRecords.length;
-    const confirmDelete = window.confirm(
-      `¿Deseas eliminar permanentemente las ${count} muestras con Área "#N/D"?\n\nSe eliminarán de tus estadísticas, de los filtros y de la base de datos.`
+    const totalRecordsToDelete = ndAreaRecords.length;
+    const isConfirmed = window.confirm(
+      `¿Deseas eliminar permanentemente las ${totalRecordsToDelete} muestras con Área "#N/D"?\n\nSe eliminarán de tus estadísticas, de los filtros y de la base de datos.`
     );
-    if (!confirmDelete) return;
+    if (!isConfirmed) return;
 
     setIsDeletingNd(true);
 
-    const idsToExclude = ndAreaRecords.map((r) => (r.DocId || r.ID || '').trim()).filter(Boolean);
+    const idsToExclude = ndAreaRecords
+      .map((record) => (record.DocId || record.ID || '').trim())
+      .filter(Boolean);
 
-    // 1. Guardar en lista de exclusión local permanente para que no reaparezcan
-    try {
-      const stored = localStorage.getItem('MAZ_EXCLUDED_DOC_IDS');
-      const existing: string[] = stored ? JSON.parse(stored) : [];
-      const combined = Array.from(new Set([...existing, ...idsToExclude]));
-      localStorage.setItem('MAZ_EXCLUDED_DOC_IDS', JSON.stringify(combined));
-    } catch (e) {
-      console.warn('Error guardando en excluded ids:', e);
-    }
+    // 1. Guardar en lista de exclusión permanente local
+    saveExcludedDocumentIdsLocally(idsToExclude);
 
-    // 2. Eliminar inmediatamente de la memoria del Dashboard y guardar en caché local
-    const updatedRecords = allRecords.filter((r) => {
-      const area = (r.Area || '').trim();
-      const id = (r.DocId || r.ID || '').trim();
-      return area !== '#N/D' && !area.includes('#N/D') && !idsToExclude.includes(id);
+    // 2. Eliminar de la memoria del Dashboard y actualizar caché IndexedDB
+    const updatedRecords = allRecords.filter((record) => {
+      const area = (record.Area || '').trim();
+      const identifier = (record.DocId || record.ID || '').trim();
+      return area !== '#N/D' && !area.includes('#N/D') && !idsToExclude.includes(identifier);
     });
     setAllRecords(updatedRecords);
     await saveCachedAudits(updatedRecords);
 
     // 3. Resetear filtro de área si estaba seleccionado #N/D
-    setFilters((prev) => (prev.area === '#N/D' ? { ...prev, area: 'ALL' } : prev));
+    setFilters((previousFilters) =>
+      previousFilters.area === '#N/D' ? { ...previousFilters, area: 'ALL' } : previousFilters
+    );
 
-    // 4. Intentar borrar en Firebase en la nube (sin bloquear si las reglas son de solo lectura)
-    let cloudDeleted = false;
+    // 4. Intentar borrado remoto en Firebase Cloud sin bloquear la app
+    let isCloudDeleted = false;
     try {
       const countDeleted = await deleteRecordsByDocIds(idsToExclude);
-      if (countDeleted > 0) cloudDeleted = true;
-    } catch (err) {
-      console.warn('Firebase Cloud rechazó la eliminación remota por reglas de seguridad:', err);
+      if (countDeleted > 0) isCloudDeleted = true;
+    } catch (error) {
+      console.warn('Firebase Cloud rechazó la eliminación remota por reglas de seguridad:', error);
     }
 
-    if (cloudDeleted) {
-      setDeleteSuccessMsg(`¡Se eliminaron exitosamente las ${count} muestras de Firebase y del Dashboard!`);
+    if (isCloudDeleted) {
+      setDeleteSuccessMsg(`¡Se eliminaron exitosamente las ${totalRecordsToDelete} muestras de Firebase y del Dashboard!`);
     } else {
-      setDeleteSuccessMsg(`¡Se eliminaron y purgaron las ${count} muestras del Dashboard y de la memoria!`);
+      setDeleteSuccessMsg(`¡Se eliminaron y purgaron las ${totalRecordsToDelete} muestras del Dashboard y de la memoria!`);
     }
 
     setTimeout(() => setDeleteSuccessMsg(null), 8000);
     setIsDeletingNd(false);
   };
 
-  // Opciones de filtros únicos derivados de los datos
+  // Opciones de filtros únicos calculados reactivamente
   const availableYears = useMemo(() => {
-    const set = new Set<number>();
-    allRecords.forEach((r) => {
-      const match = r.ID.match(/PC-(\d{4})/);
-      if (match) set.add(Number(match[1]));
-      else if (r.FECHADOR) set.add(new Date(r.FECHADOR).getFullYear());
+    const uniqueYears = new Set<number>();
+    allRecords.forEach((record) => {
+      const idMatch = record.ID.match(/PC-(\d{4})/);
+      if (idMatch) {
+        uniqueYears.add(Number(idMatch[1]));
+      } else if (record.FECHADOR) {
+        uniqueYears.add(new Date(record.FECHADOR).getFullYear());
+      }
     });
-    return Array.from(set).sort();
+    return Array.from(uniqueYears).sort((yearA, yearB) => yearA - yearB);
   }, [allRecords]);
 
   const availableMonths = useMemo(() => {
-    const set = new Set<number>();
-    allRecords.forEach((r) => {
-      if (r.MES) set.add(r.MES);
+    const uniqueMonths = new Set<number>();
+    allRecords.forEach((record) => {
+      if (record.MES) uniqueMonths.add(record.MES);
     });
-    return Array.from(set).sort((a, b) => a - b);
+    return Array.from(uniqueMonths).sort((monthA, monthB) => monthA - monthB);
   }, [allRecords]);
 
   const availableWeeks = useMemo(() => {
-    const set = new Set<number>();
-    allRecords.forEach((r) => {
-      if (r.SEMANA) set.add(r.SEMANA);
+    const uniqueWeeks = new Set<number>();
+    allRecords.forEach((record) => {
+      if (record.SEMANA) uniqueWeeks.add(record.SEMANA);
     });
-    return Array.from(set).sort((a, b) => a - b);
+    return Array.from(uniqueWeeks).sort((weekA, weekB) => weekA - weekB);
   }, [allRecords]);
 
   const availableAreas = useMemo(() => {
-    const set = new Set<string>();
-    allRecords.forEach((r) => {
-      if (r.Area) set.add(r.Area);
+    const uniqueAreas = new Set<string>();
+    allRecords.forEach((record) => {
+      if (record.Area) uniqueAreas.add(record.Area);
     });
-    return Array.from(set).sort();
+    return Array.from(uniqueAreas).sort();
   }, [allRecords]);
 
   const availableShifts = useMemo(() => {
-    const set = new Set<string>();
-    allRecords.forEach((r) => {
-      if (r.Shift) set.add(r.Shift);
+    const uniqueShifts = new Set<string>();
+    allRecords.forEach((record) => {
+      if (record.Shift) uniqueShifts.add(record.Shift);
     });
-    return Array.from(set).sort();
+    return Array.from(uniqueShifts).sort();
   }, [allRecords]);
 
-  // Aplicación reactiva de filtros
+  // Aplicación reactiva de filtros (Complejidad Ciclomática: 2)
   const filteredRecords = useMemo(() => {
-    return allRecords.filter((record) => {
-      // Filtro Año
-      if (filters.year !== 'ALL') {
-        const hasYear = record.ID.includes(`-${filters.year}-`) || (record.FECHADOR && record.FECHADOR.startsWith(String(filters.year)));
-        if (!hasYear) return false;
-      }
+    const rawSearchQuery = filters.tasterSearch.trim();
+    const searchTokens =
+      rawSearchQuery !== '' ? normalizeSearchText(rawSearchQuery).split(/\s+/).filter(Boolean) : [];
 
-      // Filtro Mes
-      if (filters.month !== 'ALL') {
-        if (record.MES !== filters.month) return false;
-      }
-
-      // Filtro Semana
-      if (filters.week !== 'ALL') {
-        if (record.SEMANA !== filters.week) return false;
-      }
-
-      // Filtro Área
-      if (filters.area !== 'ALL') {
-        if (record.Area !== filters.area) return false;
-      }
-
-      // Filtro Turno
-      if (filters.shift !== 'ALL') {
-        if (record.Shift !== filters.shift) return false;
-      }
-
-      // Filtro Estado OK / NOK
-      if (filters.status !== 'ALL') {
-        if (record.OKNOK !== filters.status) return false;
-      }
-
-      // Filtro Búsqueda inteligente multi-campo (Catador, Muestra, Tanque, Remark, ID, Área, Turno, Marca, Planta)
-      if (filters.tasterSearch.trim() !== '') {
-        const queryTokens = normalizeSearchText(filters.tasterSearch).split(/\s+/).filter(Boolean);
-        if (queryTokens.length > 0) {
-          const searchableText = normalizeSearchText(
-            `${record.ID || ''} ${record.Taster || ''} ${record.Sample || ''} ${record.Tank || ''} ${record.Remark || ''} ${record.Area || ''} ${record.Shift || ''} ${record.Brand || ''} ${record.Site || ''}`
-          );
-          const allTokensMatch = queryTokens.every((token) => searchableText.includes(token));
-          if (!allTokensMatch) return false;
-        }
-      }
-
-      return true;
-    });
+    return allRecords.filter((record) => isRecordMatchingFilters(record, filters, searchTokens));
   }, [allRecords, filters]);
 
   // Mapa de validación de catados según regla 2-3 / 1 / 0
@@ -266,43 +314,46 @@ export function App() {
     return computeValidationMap(filteredRecords);
   }, [filteredRecords]);
 
-  // Exportar a archivo CSV
+  /**
+   * Exportación de auditoría completa a archivo CSV compatible con Excel
+   */
   const handleExportCSV = () => {
     if (filteredRecords.length === 0) return;
 
-    const headers = [
+    const columnHeaders = [
       'ID', 'Zone', 'Country', 'Site', 'Department', 'Taster', 'Sample',
       'Sample Date', 'Shift', 'OKNOK', 'Remark', 'Tank', 'DIA', 'SEMANA', 'MES', 'Area'
     ];
 
-    const rows = filteredRecords.map((r) => [
-      `"${r.ID}"`,
-      `"${r.Zone}"`,
-      `"${r.Country}"`,
-      `"${r.Site}"`,
-      `"${r.Department}"`,
-      `"${r.Taster}"`,
-      `"${r.Sample}"`,
-      `"${r.SampleDate}"`,
-      `"${r.Shift}"`,
-      `"${r.OKNOK}"`,
-      `"${r.Remark}"`,
-      `"${r.Tank || ''}"`,
-      r.DIA,
-      r.SEMANA,
-      r.MES,
-      `"${r.Area}"`
+    const dataRows = filteredRecords.map((record) => [
+      `"${record.ID}"`,
+      `"${record.Zone}"`,
+      `"${record.Country}"`,
+      `"${record.Site}"`,
+      `"${record.Department}"`,
+      `"${record.Taster}"`,
+      `"${record.Sample}"`,
+      `"${record.SampleDate}"`,
+      `"${record.Shift}"`,
+      `"${record.OKNOK}"`,
+      `"${record.Remark}"`,
+      `"${record.Tank || ''}"`,
+      record.DIA,
+      record.SEMANA,
+      record.MES,
+      `"${record.Area}"`
     ]);
 
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `Auditoria_Catas_Corona_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // UTF-8 BOM para evitar problemas de caracteres en Microsoft Excel
+    const csvContent = '\uFEFF' + [columnHeaders.join(','), ...dataRows.map((row) => row.join(','))].join('\n');
+    const fileBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const downloadUrl = URL.createObjectURL(fileBlob);
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.href = downloadUrl;
+    downloadAnchor.setAttribute('download', `Auditoria_Catas_Corona_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    document.body.removeChild(downloadAnchor);
   };
 
   return (
@@ -314,7 +365,7 @@ export function App() {
         onRefresh={handleRefresh}
         onExport={handleExportCSV}
         isDark={isDark}
-        onToggleTheme={() => setIsDark((prev) => !prev)}
+        onToggleTheme={() => setIsDark((previousTheme) => !previousTheme)}
       />
 
       {/* Contenido Principal */}
@@ -384,7 +435,7 @@ export function App() {
         <KpiCards
           filteredRecords={filteredRecords}
           allRecords={allRecords}
-          onFilterStatus={(status) => setFilters((prev) => ({ ...prev, status }))}
+          onFilterStatus={(status) => setFilters((previousFilters) => ({ ...previousFilters, status }))}
         />
 
         {/* Sección de Gráficos Principales */}
@@ -455,7 +506,7 @@ export function App() {
               <WeeklyTrendChart records={filteredRecords} />
             </div>
 
-            {/* Fila 4: Panel de Auditoría de Validación Sensorial (Regla 2 y 3 Catadores) */}
+            {/* Fila 4: Panel de Auditoría Diaria y Validación (Regla 2-3 / 1 / 0) */}
             <div>
               <ValidationAuditPanel
                 records={filteredRecords}
