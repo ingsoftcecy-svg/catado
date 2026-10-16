@@ -80,24 +80,24 @@ export const ParetoTastersChart: React.FC<ParetoTastersChartProps> = ({ records 
   };
 
   return (
-    <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-5 shadow-sm dark:shadow-xl flex flex-col h-full transition-colors">
+    <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-3.5 shadow-sm dark:shadow-xl flex flex-col h-full transition-colors">
       {/* Cabecera del Gráfico */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-100 dark:border-slate-800">
         <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <h2 className="text-sm lg:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <Users className="w-4 h-4 text-emerald-500" />
             Pareto de Catadores
             <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
               (Cantidad de Muestras)
             </span>
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
             Distribución 80/20 del volumen evaluado por cada panelista
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-1.5">
+          <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold flex items-center gap-1.5">
             <TrendingUp className="w-3.5 h-3.5" />
             Top {pareto80ThresholdCount} cubren el 80%
           </span>
@@ -105,11 +105,11 @@ export const ParetoTastersChart: React.FC<ParetoTastersChartProps> = ({ records 
       </div>
 
       {/* Gráfico Recharts Compuesto */}
-      <div className="flex-1 min-h-[340px] w-full">
+      <div className="flex-1 min-h-[255px] w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={paretoData}
-            margin={{ top: 20, right: 30, left: 0, bottom: 65 }}
+            margin={{ top: 12, right: 25, left: 0, bottom: 35 }}
           >
             <CartesianGrid
               strokeDasharray="3 3"
@@ -122,9 +122,9 @@ export const ParetoTastersChart: React.FC<ParetoTastersChartProps> = ({ records 
               stroke={isDarkMode ? '#64748B' : '#94A3B8'}
               tickFormatter={formatTasterDisplayName}
               interval={0}
-              angle={-45}
+              angle={-40}
               textAnchor="end"
-              height={70}
+              height={52}
               tick={{ fontSize: 10, fill: isDarkMode ? '#94A3B8' : '#475569' }}
             />
 

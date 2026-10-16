@@ -21,12 +21,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleTheme,
 }) => {
   return (
-    <header className="sticky top-0 z-40 bg-white/95 dark:bg-[#0B101D]/90 backdrop-blur-md border-b border-slate-200 dark:border-[#1E2E4A] px-4 lg:px-8 py-3 transition-colors shadow-sm">
-      <div className="max-w-[1750px] mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+    <header className="sticky top-0 z-40 bg-white/95 dark:bg-[#0B101D]/90 backdrop-blur-md border-b border-slate-200 dark:border-[#1E2E4A] px-4 lg:px-8 py-2 transition-colors shadow-sm">
+      <div className="max-w-[1750px] mx-auto flex flex-col md:flex-row items-center justify-between gap-3">
         {/* Logo & Título Principal */}
-        <div className="flex items-center gap-4 w-full md:w-auto">
+        <div className="flex items-center gap-3 w-full md:w-auto">
           {/* Logo MAZ Oficial */}
-          <div className="relative flex items-center justify-center w-14 h-14 rounded-full border-2 border-amber-400 shadow-md shadow-amber-500/10 overflow-hidden bg-black flex-shrink-0 transition-transform hover:scale-105">
+          <div className="relative flex items-center justify-center w-11 h-11 rounded-full border-2 border-amber-400 shadow-md shadow-amber-500/10 overflow-hidden bg-black flex-shrink-0 transition-transform hover:scale-105">
             <img
               src="/logo.png"
               alt="MAZ Corona Logo"
@@ -35,9 +35,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <div>
-            <h1 className="text-xl lg:text-2xl font-black tracking-tight flex items-center gap-2">
+            <h1 className="text-lg lg:text-xl font-black tracking-tight flex items-center gap-2">
               <span className="text-[#002D72] dark:text-white font-black">
-                SEGUIMIENTO <span className="text-amber-500 font-extrabold">CATADO</span>
+                Control de Rutina <span className="text-amber-500 font-extrabold">Sensorial</span>
               </span>
             </h1>
           </div>

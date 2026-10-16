@@ -254,10 +254,15 @@ export function App() {
     setIsDeletingNd(false);
   };
 
-  // Opciones de filtros únicos calculados reactivamente
+  // Por ahora solo se muestran los registros de COC (CFR permanece oculto en todo el dashboard)
+  const activeRecords = useMemo(() => {
+    return allRecords.filter((record) => (record.Area || '').trim().toUpperCase() === 'COC');
+  }, [allRecords]);
+
+  // Opciones de filtros únicos calculados reactivamente sobre los registros activos (COC)
   const availableYears = useMemo(() => {
     const uniqueYears = new Set<number>();
-    allRecords.forEach((record) => {
+    activeRecords.forEach((record) => {
       const idMatch = record.ID.match(/PC-(\d{4})/);
       if (idMatch) {
         uniqueYears.add(Number(idMatch[1]));
@@ -266,48 +271,44 @@ export function App() {
       }
     });
     return Array.from(uniqueYears).sort((yearA, yearB) => yearA - yearB);
-  }, [allRecords]);
+  }, [activeRecords]);
 
   const availableMonths = useMemo(() => {
     const uniqueMonths = new Set<number>();
-    allRecords.forEach((record) => {
+    activeRecords.forEach((record) => {
       if (record.MES) uniqueMonths.add(record.MES);
     });
     return Array.from(uniqueMonths).sort((monthA, monthB) => monthA - monthB);
-  }, [allRecords]);
+  }, [activeRecords]);
 
   const availableWeeks = useMemo(() => {
     const uniqueWeeks = new Set<number>();
-    allRecords.forEach((record) => {
+    activeRecords.forEach((record) => {
       if (record.SEMANA) uniqueWeeks.add(record.SEMANA);
     });
     return Array.from(uniqueWeeks).sort((weekA, weekB) => weekA - weekB);
-  }, [allRecords]);
+  }, [activeRecords]);
 
   const availableAreas = useMemo(() => {
-    const uniqueAreas = new Set<string>();
-    allRecords.forEach((record) => {
-      if (record.Area) uniqueAreas.add(record.Area);
-    });
-    return Array.from(uniqueAreas).sort();
-  }, [allRecords]);
+    return ['CFR', 'COC'];
+  }, []);
 
   const availableShifts = useMemo(() => {
     const uniqueShifts = new Set<string>();
-    allRecords.forEach((record) => {
+    activeRecords.forEach((record) => {
       if (record.Shift) uniqueShifts.add(record.Shift);
     });
     return Array.from(uniqueShifts).sort();
-  }, [allRecords]);
+  }, [activeRecords]);
 
-  // Aplicación reactiva de filtros (Complejidad Ciclomática: 2)
+  // Aplicación reactiva de filtros (en "Todas" o "COC" solo muestra registros de COC)
   const filteredRecords = useMemo(() => {
     const rawSearchQuery = filters.tasterSearch.trim();
     const searchTokens =
       rawSearchQuery !== '' ? normalizeSearchText(rawSearchQuery).split(/\s+/).filter(Boolean) : [];
 
-    return allRecords.filter((record) => isRecordMatchingFilters(record, filters, searchTokens));
-  }, [allRecords, filters]);
+    return activeRecords.filter((record) => isRecordMatchingFilters(record, filters, searchTokens));
+  }, [activeRecords, filters]);
 
   // Mapa de validación de catados según regla 2-3 / 1 / 0
   const validationMap = useMemo(() => {
@@ -368,7 +369,7 @@ export function App() {
       />
 
       {/* Contenido Principal */}
-      <main className="flex-1 max-w-[1750px] w-full mx-auto px-4 lg:px-8 py-6 space-y-6">
+      <main className="flex-1 max-w-[1750px] w-full mx-auto px-4 lg:px-8 py-2.5 space-y-2.5">
         
         {/* Barra de Filtros Reactivos */}
         <FilterBar
@@ -433,7 +434,7 @@ export function App() {
         {/* Tarjetas KPI */}
         <KpiCards
           filteredRecords={filteredRecords}
-          allRecords={allRecords}
+          allRecords={activeRecords}
           onFilterStatus={(status) => setFilters((previousFilters) => ({ ...previousFilters, status }))}
         />
 
@@ -478,10 +479,10 @@ export function App() {
             </button>
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-3.5">
             
             {/* Fila 1: Pareto de Catadores (2/3) + % Uso por Área (1/3) */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
               <div className="lg:col-span-2">
                 <ParetoTastersChart records={filteredRecords} />
               </div>
@@ -491,7 +492,7 @@ export function App() {
             </div>
 
             {/* Fila 2: Pareto de Muestras/Etapas (2/3) + Catados por Turno (1/3) */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
               <div className="lg:col-span-2">
                 <ParetoSamplesChart records={filteredRecords} />
               </div>

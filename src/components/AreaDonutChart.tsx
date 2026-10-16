@@ -88,26 +88,26 @@ export const AreaDonutChart: React.FC<AreaDonutChartProps> = ({ records }) => {
   };
 
   return (
-    <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-5 shadow-sm dark:shadow-xl flex flex-col h-full transition-colors">
-      <div className="flex items-center justify-between mb-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+    <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-3.5 shadow-sm dark:shadow-xl flex flex-col h-full transition-colors">
+      <div className="flex items-center justify-between mb-1.5 pb-2 border-b border-slate-100 dark:border-slate-800">
         <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+          <h2 className="text-sm lg:text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <PieIcon className="w-4 h-4 text-amber-500" />
             % de Uso por Área
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
             Distribución proporcional entre CFR y COC
           </p>
         </div>
       </div>
 
-      <div className="flex-1 min-h-[260px] w-full relative">
+      <div className="flex-1 min-h-[230px] w-full relative">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
               data={areaDistributionData}
-              innerRadius={65}
-              outerRadius={95}
+              innerRadius={55}
+              outerRadius={82}
               paddingAngle={4}
               dataKey="value"
             >
@@ -123,7 +123,7 @@ export const AreaDonutChart: React.FC<AreaDonutChartProps> = ({ records }) => {
             <Tooltip content={renderCustomTooltip} />
             <Legend
               verticalAlign="bottom"
-              height={36}
+              height={28}
               formatter={(legendValue: string) => {
                 const foundItem = areaDistributionData.find(
                   (item) => item.name === legendValue
@@ -140,8 +140,8 @@ export const AreaDonutChart: React.FC<AreaDonutChartProps> = ({ records }) => {
         </ResponsiveContainer>
 
         {/* Total centrado dentro de la dona */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-8">
-          <span className="text-2xl font-black text-slate-900 dark:text-white">
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pb-6">
+          <span className="text-xl font-black text-slate-900 dark:text-white">
             {totalAuditsCount.toLocaleString()}
           </span>
           <span className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold uppercase">

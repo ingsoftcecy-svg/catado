@@ -8,7 +8,8 @@ import {
   XCircle,
   MessageSquare,
   X,
-  Filter
+  Filter,
+  RotateCcw
 } from 'lucide-react';
 import { AuditRecord, ValidationStatus, RecordValidationInfo } from '../types/audit';
 
@@ -19,6 +20,54 @@ interface AuditDetailTableProps {
   onSelectValidationFilter?: (filter: 'ALL' | ValidationStatus) => void;
   selectedTasterIncident?: string | null;
   onSelectTasterIncident?: (tasterName: string | null) => void;
+}
+
+interface ColumnFiltersState {
+  id: string;
+  taster: string;
+  sample: string;
+  tank: string;
+  shift: string;
+  area: string;
+  weekMonth: string;
+  result: string;
+  remark: string;
+  validation: string;
+}
+
+const INITIAL_COLUMN_FILTERS: ColumnFiltersState = {
+  id: '',
+  taster: 'ALL',
+  sample: 'ALL',
+  tank: '',
+  shift: 'ALL',
+  area: 'ALL',
+  weekMonth: 'ALL',
+  result: 'ALL',
+  remark: '',
+  validation: 'ALL',
+};
+
+/**
+ * Normaliza texto para comparación insensible a mayúsculas y acentos.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function normalizeColumnText(value: string | undefined): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Valida si un tanque tiene un valor significativo registrado.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+function hasValidTankValue(tank: string | undefined): boolean {
+  if (!tank) return false;
+  const trimmedTank = tank.trim();
+  return trimmedTank !== '' && trimmedTank !== '0' && trimmedTank !== '-';
 }
 
 /**
@@ -32,34 +81,110 @@ function hasSignificantRemark(remark: string | undefined): boolean {
 }
 
 /**
- * Filtra los registros que se mostrarán en la tabla combinando catador, estado de validación y remarks.
- * Complejidad Ciclomática: 4 (< 7)
+ * Obtiene la etiqueta formateada de Semana y Mes para un registro.
+ * Complejidad Ciclomática: 1 (< 7)
+ */
+function getWeekMonthLabel(record: AuditRecord): string {
+  return `Sem ${record.SEMANA} • M${record.MES}`;
+}
+
+/**
+ * Evalúa coincidencia parcial de texto en una columna.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function matchesTextColumn(cellText: string, filterQuery: string): boolean {
+  if (!filterQuery.trim()) return true;
+  return normalizeColumnText(cellText).includes(normalizeColumnText(filterQuery));
+}
+
+/**
+ * Evalúa coincidencia exacta de selector en una columna.
+ * Complejidad Ciclomática: 2 (< 7)
+ */
+function matchesSelectColumn(cellValue: string, selectedOption: string): boolean {
+  return selectedOption === 'ALL' || cellValue === selectedOption;
+}
+
+/**
+ * Evalúa las primeras 5 columnas de la tabla (ID, Catador, Muestra, Tanque, Turno).
+ * Complejidad Ciclomática: 5 (< 7)
+ */
+function matchesPrimaryColumns(record: AuditRecord, colFilters: ColumnFiltersState): boolean {
+  const tankText = hasValidTankValue(record.Tank) ? String(record.Tank).trim() : 'Sin Tanque (0)';
+  return (
+    matchesTextColumn(record.ID || '', colFilters.id) &&
+    matchesSelectColumn(record.Taster || '', colFilters.taster) &&
+    matchesSelectColumn(record.Sample || '', colFilters.sample) &&
+    matchesTextColumn(tankText, colFilters.tank) &&
+    matchesSelectColumn(record.Shift || '', colFilters.shift)
+  );
+}
+
+/**
+ * Evalúa las últimas 5 columnas de la tabla (Área, Sem/Mes, Resultado, Remark, Validación).
+ * Complejidad Ciclomática: 5 (< 7)
+ */
+function matchesSecondaryColumns(
+  record: AuditRecord,
+  colFilters: ColumnFiltersState,
+  validationStatus?: ValidationStatus
+): boolean {
+  const remarkText = hasSignificantRemark(record.Remark) ? String(record.Remark).trim() : 'Sin Remark (0)';
+  return (
+    matchesSelectColumn(record.Area || '', colFilters.area) &&
+    matchesSelectColumn(getWeekMonthLabel(record), colFilters.weekMonth) &&
+    matchesSelectColumn(record.OKNOK || '', colFilters.result) &&
+    matchesTextColumn(remarkText, colFilters.remark) &&
+    matchesSelectColumn(validationStatus || '', colFilters.validation)
+  );
+}
+
+/**
+ * Verifica si algún filtro de columna se encuentra activo.
+ * Complejidad Ciclomática: 3 (< 7)
+ */
+function hasAnyActiveColumnFilter(colFilters: ColumnFiltersState): boolean {
+  const hasTextFilter = Boolean(colFilters.id.trim() || colFilters.tank.trim() || colFilters.remark.trim());
+  const hasSelectFilter = [
+    colFilters.taster,
+    colFilters.sample,
+    colFilters.shift,
+    colFilters.area,
+    colFilters.weekMonth,
+    colFilters.result,
+    colFilters.validation,
+  ].some((val) => val !== 'ALL');
+  return hasTextFilter || hasSelectFilter;
+}
+
+/**
+ * Filtra los registros que se mostrarán en la tabla combinando catador, estado de validación, remarks y filtros por columna.
+ * Complejidad Ciclomática: 5 (< 7)
  */
 function filterTableRecords(
   sourceRecords: AuditRecord[],
   selectedTaster: string | null,
   activeFilter: 'ALL' | ValidationStatus,
+  colFilters: ColumnFiltersState,
   validationMap?: Map<string, RecordValidationInfo>,
   onlyWithRemarks?: boolean
 ): AuditRecord[] {
   return sourceRecords.filter((record) => {
-    if (selectedTaster && record.Taster !== selectedTaster) {
+    if (selectedTaster && record.Taster !== selectedTaster) return false;
+
+    const recordIdentifier = record.ID || record.DocId;
+    const validationInfo = recordIdentifier && validationMap ? validationMap.get(recordIdentifier) : undefined;
+
+    if (activeFilter !== 'ALL' && validationMap && validationInfo?.status !== activeFilter) {
       return false;
     }
 
-    if (activeFilter !== 'ALL' && validationMap) {
-      const recordIdentifier = record.ID || record.DocId;
-      const validationInfo = recordIdentifier ? validationMap.get(recordIdentifier) : undefined;
-      if (validationInfo?.status !== activeFilter) {
-        return false;
-      }
-    }
+    if (onlyWithRemarks && !hasSignificantRemark(record.Remark)) return false;
 
-    if (onlyWithRemarks && !hasSignificantRemark(record.Remark)) {
-      return false;
-    }
-
-    return true;
+    return (
+      matchesPrimaryColumns(record, colFilters) &&
+      matchesSecondaryColumns(record, colFilters, validationInfo?.status)
+    );
   });
 }
 
@@ -94,7 +219,7 @@ function computeValidationStatusCounts(
 }
 
 /**
- * Tabla detallada con paginación optimizada (12 registros por página).
+ * Tabla detallada con paginación optimizada (12 registros por página) y filtros individuales por columna.
  */
 export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
   records,
@@ -106,23 +231,58 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
 }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [onlyWithRemarks, setOnlyWithRemarks] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(INITIAL_COLUMN_FILTERS);
   const pageSize = 12;
 
-  // Filtrado reactivo de la tabla combinando validación, catador y remark
+  const updateColumnFilter = <K extends keyof ColumnFiltersState>(key: K, value: ColumnFiltersState[K]) => {
+    setColumnFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const resetColumnFilters = () => {
+    setColumnFilters(INITIAL_COLUMN_FILTERS);
+  };
+
+  // Opciones únicas para los selectores de cada columna
+  const columnOptions = useMemo(() => {
+    const tasters = new Set<string>();
+    const samples = new Set<string>();
+    const shifts = new Set<string>();
+    const areas = new Set<string>();
+    const weekMonths = new Set<string>();
+
+    records.forEach((record) => {
+      if (record.Taster) tasters.add(record.Taster);
+      if (record.Sample) samples.add(record.Sample);
+      if (record.Shift) shifts.add(record.Shift);
+      if (record.Area) areas.add(record.Area);
+      weekMonths.add(getWeekMonthLabel(record));
+    });
+
+    return {
+      tasters: Array.from(tasters).sort(),
+      samples: Array.from(samples).sort(),
+      shifts: Array.from(shifts).sort(),
+      areas: Array.from(areas).sort(),
+      weekMonths: Array.from(weekMonths),
+    };
+  }, [records]);
+
+  // Filtrado reactivo de la tabla combinando validación, catador, remark y filtros de columna
   const recordsToDisplay = useMemo(() => {
     return filterTableRecords(
       records,
       selectedTasterIncident,
       activeValidationFilter,
+      columnFilters,
       validationMap,
       onlyWithRemarks
     );
-  }, [records, selectedTasterIncident, activeValidationFilter, validationMap, onlyWithRemarks]);
+  }, [records, selectedTasterIncident, activeValidationFilter, columnFilters, validationMap, onlyWithRemarks]);
 
   // Resetear a página 1 automáticamente cuando cambian los registros o filtros aplicados
   useEffect(() => {
     setCurrentPage(1);
-  }, [records, selectedTasterIncident, activeValidationFilter, onlyWithRemarks]);
+  }, [records, selectedTasterIncident, activeValidationFilter, onlyWithRemarks, columnFilters]);
 
   const totalPages = Math.max(1, Math.ceil(recordsToDisplay.length / pageSize));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
@@ -141,6 +301,8 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
   const countsByStatus = useMemo(() => {
     return computeValidationStatusCounts(records, validationMap);
   }, [records, validationMap]);
+
+  const isAnyColumnFiltered = useMemo(() => hasAnyActiveColumnFilter(columnFilters), [columnFilters]);
 
   return (
     <div className="bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-[#1E2E4A] rounded-2xl p-5 shadow-sm dark:shadow-xl transition-colors space-y-4">
@@ -197,9 +359,10 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
             if (onSelectValidationFilter) onSelectValidationFilter('ALL');
             setOnlyWithRemarks(false);
             if (onSelectTasterIncident) onSelectTasterIncident(null);
+            resetColumnFilters();
           }}
           className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
-            activeValidationFilter === 'ALL' && !onlyWithRemarks && !selectedTasterIncident
+            activeValidationFilter === 'ALL' && !onlyWithRemarks && !selectedTasterIncident && !isAnyColumnFiltered
               ? 'bg-slate-800 text-white dark:bg-slate-700'
               : 'bg-slate-100 hover:bg-slate-200 dark:bg-[#070A12] dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400'
           }`}
@@ -278,6 +441,19 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
             </button>
           </span>
         )}
+
+        {/* Botón para limpiar filtros de columnas cuando hay alguno activo */}
+        {isAnyColumnFiltered && (
+          <button
+            type="button"
+            onClick={resetColumnFilters}
+            className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 hover:bg-amber-100 transition-colors"
+            title="Limpiar todos los filtros de las columnas"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Limpiar filtros de columna</span>
+          </button>
+        )}
       </div>
 
       {/* Tabla con scroll horizontal responsivo */}
@@ -285,24 +461,150 @@ export const AuditDetailTable: React.FC<AuditDetailTableProps> = ({
         <table className="w-full text-left text-xs">
           <thead className="bg-slate-100 dark:bg-[#070A12] text-slate-700 dark:text-slate-400 uppercase font-bold text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-800">
             <tr>
-              <th className="py-3 px-3">ID Muestra</th>
-              <th className="py-3 px-3">Catador</th>
-              <th className="py-3 px-3">Muestra / Etapa</th>
-              <th className="py-3 px-3">Tanque</th>
-              <th className="py-3 px-3">Turno</th>
-              <th className="py-3 px-3">Área</th>
-              <th className="py-3 px-3">Sem / Mes</th>
-              <th className="py-3 px-3 text-center">Resultado</th>
-              <th className="py-3 px-3">Remark / Observación</th>
-              <th className="py-3 px-3 text-center">Validación Panel</th>
+              <th className="py-2.5 px-3 align-top min-w-[140px]">
+                <div className="mb-1.5">ID Muestra</div>
+                <input
+                  type="text"
+                  value={columnFilters.id}
+                  onChange={(e) => updateColumnFilter('id', e.target.value)}
+                  placeholder="Filtrar ID..."
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-amber-400"
+                />
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[170px]">
+                <div className="mb-1.5">Catador</div>
+                <select
+                  value={columnFilters.taster}
+                  onChange={(e) => updateColumnFilter('taster', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todos</option>
+                  {columnOptions.tasters.map((taster) => (
+                    <option key={taster} value={taster}>
+                      {taster}
+                    </option>
+                  ))}
+                </select>
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[160px]">
+                <div className="mb-1.5">Muestra / Etapa</div>
+                <select
+                  value={columnFilters.sample}
+                  onChange={(e) => updateColumnFilter('sample', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todas</option>
+                  {columnOptions.samples.map((sample) => (
+                    <option key={sample} value={sample}>
+                      {sample}
+                    </option>
+                  ))}
+                </select>
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[140px]">
+                <div className="mb-1.5">Tanque</div>
+                <input
+                  type="text"
+                  value={columnFilters.tank}
+                  onChange={(e) => updateColumnFilter('tank', e.target.value)}
+                  placeholder="Filtrar tanque..."
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-amber-400"
+                />
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[125px]">
+                <div className="mb-1.5">Turno</div>
+                <select
+                  value={columnFilters.shift}
+                  onChange={(e) => updateColumnFilter('shift', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todos</option>
+                  {columnOptions.shifts.map((shift) => (
+                    <option key={shift} value={shift}>
+                      {shift}
+                    </option>
+                  ))}
+                </select>
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[85px]">
+                <div className="mb-1.5">Área</div>
+                <select
+                  value={columnFilters.area}
+                  onChange={(e) => updateColumnFilter('area', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todas</option>
+                  {columnOptions.areas.map((area) => (
+                    <option key={area} value={area}>
+                      {area}
+                    </option>
+                  ))}
+                </select>
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[115px]">
+                <div className="mb-1.5">Sem / Mes</div>
+                <select
+                  value={columnFilters.weekMonth}
+                  onChange={(e) => updateColumnFilter('weekMonth', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todos</option>
+                  {columnOptions.weekMonths.map((wm) => (
+                    <option key={wm} value={wm}>
+                      {wm}
+                    </option>
+                  ))}
+                </select>
+              </th>
+              <th className="py-2.5 px-3 align-top text-center min-w-[100px]">
+                <div className="mb-1.5">Resultado</div>
+                <select
+                  value={columnFilters.result}
+                  onChange={(e) => updateColumnFilter('result', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todos</option>
+                  <option value="OK">OK</option>
+                  <option value="NOK">NOK</option>
+                </select>
+              </th>
+              <th className="py-2.5 px-3 align-top min-w-[150px]">
+                <div className="mb-1.5">Remark / Observación</div>
+                <input
+                  type="text"
+                  value={columnFilters.remark}
+                  onChange={(e) => updateColumnFilter('remark', e.target.value)}
+                  placeholder="Filtrar remark..."
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-amber-400"
+                />
+              </th>
+              <th className="py-2.5 px-3 align-top text-center min-w-[140px]">
+                <div className="mb-1.5">Validación Panel</div>
+                <select
+                  value={columnFilters.validation}
+                  onChange={(e) => updateColumnFilter('validation', e.target.value)}
+                  className="w-full bg-white dark:bg-[#0D1424] border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px] font-normal normal-case text-slate-800 dark:text-slate-100 focus:outline-none focus:border-amber-400"
+                >
+                  <option value="ALL">Todas</option>
+                  <option value="VALIDATED">Está Bien (2-3)</option>
+                  <option value="SINGLE">Catado Mal (1)</option>
+                  <option value="INCOMPLETE">Faltan Col. (0)</option>
+                </select>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-slate-700 dark:text-slate-300">
-            {currentRecords.map((record, index) => {
+            {currentRecords.length === 0 ? (
+              <tr>
+                <td colSpan={10} className="py-8 text-center text-slate-500 dark:text-slate-400">
+                  No se encontraron muestras con los filtros seleccionados.
+                </td>
+              </tr>
+            ) : currentRecords.map((record, index) => {
               const recordIdentifier = record.ID || record.DocId;
               const validationInfo = recordIdentifier && validationMap ? validationMap.get(recordIdentifier) : undefined;
-              const hasValidTank = Boolean(record.Tank && record.Tank.trim() !== '' && record.Tank !== '0' && record.Tank !== '-');
-              const hasRemark = Boolean(record.Remark && record.Remark.trim() !== '' && record.Remark.trim() !== '-' && record.Remark !== '0');
+              const hasValidTank = hasValidTankValue(record.Tank);
+              const hasRemark = hasSignificantRemark(record.Remark);
 
               return (
                 <tr key={`${record.ID || index}_${index}`} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
